@@ -33,7 +33,7 @@ using namespace std;
 // malloc implementation.  Otherwise they are allocated directly from
 // vm.
 #if !defined __APPLE__ && !defined LOWMEM
-//#include <malloc.h>
+#include <malloc.h>
 //comment out the following two lines if running out of memory
 #include <cstdint>
 static int __ii =  mallopt(M_MMAP_MAX,0);
