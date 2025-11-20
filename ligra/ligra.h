@@ -29,7 +29,6 @@
 #include <cstring>
 #include <string>
 #include <algorithm>
-#include <chrono>
 #include "parallel.h"
 #include "gettime.h"
 #include "utils.h"
@@ -247,7 +246,7 @@ vertexSubsetData<data> edgeMapData(graph<vertex>& GA, VS &vs, F f,
   uintT* degrees = NULL;
   vertex* frontierVertices = NULL;
   uintT outDegrees = 0;
-  if((fl & no_dense) || threshold > 0) { //compute sum of out-degrees if threshold > 0 
+  if((fl & no_dense) || threshold > 0) { //compute sum of out-degrees if threshold > 0
     vs.toSparse();
     degrees = newA(uintT, m);
     frontierVertices = newA(vertex,m);
@@ -472,7 +471,7 @@ template<class vertex>
 void Compute(hypergraph<vertex>&, commandLine);
 
 int parallel_main(int argc, char* argv[]) {
-  // std::cout << "Hello from JX" << std::endl;
+  std::cout << "Hello from JX" << std::endl;
   commandLine P(argc,argv," [-s] <inFile>");
   char* iFile = P.getArgument(0);
   bool symmetric = P.getOptionValue("-s");
@@ -521,7 +520,6 @@ int parallel_main(int argc, char* argv[]) {
   } else {
     if (symmetric) {
 #ifndef HYPER
-      std::cout << "Load Graph " << std::endl;
       graph<symmetricVertex> G =
         readGraph<symmetricVertex>(iFile,compressed,symmetric,binary,mmap); //symmetric graph
 #else
@@ -529,26 +527,13 @@ int parallel_main(int argc, char* argv[]) {
         readHypergraph<symmetricVertex>(iFile,compressed,symmetric,binary,mmap); //symmetric graph
 #endif
 
-      std::cout << "Algorithm Execution " << std::endl;
+      std::cout << "Hello from JX - 3 " << std::endl;
       // Compute(G,P);
       for(int r=0;r<rounds;r++) {
-// --- Create a fresh deep copy for this round ---
-        std::cout << "Copy prior to Execution " << std::endl;
-#ifndef HYPER
-        // This invokes the Deep Copy Constructor and prints "Copy Graph (Copy Constructor)"
-        graph<symmetricVertex> G_copy = G;
-#else
-        // This invokes the Deep Copy Constructor and prints "Copy Hypergraph (Copy Constructor)"
-        hypergraph<symmetricVertex> G_copy = G_original;
-#endif
-
         startTime();
-
-        Compute(G_copy,P);
+        Compute(G,P);
 
         nextTime("Running time");
-
-        // G_copy.del();
       }
       G.del();
     } else {
