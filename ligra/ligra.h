@@ -491,6 +491,7 @@ int parallel_main(int argc, char* argv[]) {
 
       std::cout << "Hello from JX - 1 " << std::endl;
       // Compute(G,P);
+
       for(int r=0;r<rounds;r++) {
         startTime();
         Compute(G,P);
