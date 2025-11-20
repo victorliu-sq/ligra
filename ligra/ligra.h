@@ -521,6 +521,7 @@ int parallel_main(int argc, char* argv[]) {
   } else {
     if (symmetric) {
 #ifndef HYPER
+      std::cout << "Load Graph " << std::endl;
       graph<symmetricVertex> G =
         readGraph<symmetricVertex>(iFile,compressed,symmetric,binary,mmap); //symmetric graph
 #else
@@ -528,22 +529,26 @@ int parallel_main(int argc, char* argv[]) {
         readHypergraph<symmetricVertex>(iFile,compressed,symmetric,binary,mmap); //symmetric graph
 #endif
 
-      std::cout << "Hello from JX - 3 " << std::endl;
+      std::cout << "Algorithm Execution " << std::endl;
       // Compute(G,P);
       for(int r=0;r<rounds;r++) {
-        // startTime();
-        auto start = std::chrono::high_resolution_clock::now();
+// --- Create a fresh deep copy for this round ---
+        std::cout << "Copy prior to Execution " << std::endl;
+#ifndef HYPER
+        // This invokes the Deep Copy Constructor and prints "Copy Graph (Copy Constructor)"
+        graph<symmetricVertex> G_copy = G;
+#else
+        // This invokes the Deep Copy Constructor and prints "Copy Hypergraph (Copy Constructor)"
+        hypergraph<symmetricVertex> G_copy = G_original;
+#endif
 
-        Compute(G,P);
+        startTime();
 
-        // nextTime("Running time");
-        auto end = std::chrono::high_resolution_clock::now();
+        Compute(G_copy,P);
 
-        // Calculate the duration
-        std::chrono::duration<double> duration = end - start;
+        nextTime("Running time");
 
-        // Print the time taken
-        std::cout << "Running time" << " : " << duration.count() << std::endl;
+        // G_copy.del();
       }
       G.del();
     } else {

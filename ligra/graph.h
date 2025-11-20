@@ -116,6 +116,57 @@ graph(vertex* _V, long _n, long _m, Deletable* _D, uintE* _flags) : V(_V),
     free(D);
   }
 
+  // 1. Deep Copy Constructor
+  graph(const graph& other) :
+    n(other.n), m(other.m), transposed(other.transposed)
+  {
+    std::cout << "Copy Graph (Copy Constructor)" << std::endl; // Confirmation message
+
+    // Deep copy V: Allocate new memory and copy data
+    // Assuming V has size n
+    V = (vertex*)malloc(n * sizeof(vertex));
+    std::copy(other.V, other.V + n, V);
+
+    // Deep copy D: Use the virtual clone() method
+    // D = other.D->clone();
+
+    // Deep copy flags
+    if (other.flags) {
+      flags = (uintE*)malloc(n * sizeof(uintE));
+      std::copy(other.flags, other.flags + n, flags);
+    } else {
+      flags = NULL;
+    }
+  }
+
+  // 2. Deep Copy Assignment Operator (Rule of Three/Five)
+  graph& operator=(const graph& other) {
+    std::cout << "Copy Graph (Copy Assignment Operator)" << std::endl; // Confirmation message
+    if (this != &other) { // Handle self-assignment
+      // 1. Clean up existing resources (this avoids temporary memory/swap)
+      del();
+
+      // 2. Copy data fields
+      n = other.n;
+      m = other.m;
+      transposed = other.transposed;
+
+      // 3. Deep copy dynamic resources (same logic as copy constructor)
+      V = (vertex*)malloc(n * sizeof(vertex));
+      std::copy(other.V, other.V + n, V);
+
+      // D = other.D->clone();
+
+      if (other.flags) {
+        flags = (uintE*)malloc(n * sizeof(uintE));
+        std::copy(other.flags, other.flags + n, flags);
+      } else {
+        flags = NULL;
+      }
+    }
+    return *this;
+  }
+
   void transpose() {
     if ((sizeof(vertex) == sizeof(asymmetricVertex)) ||
         (sizeof(vertex) == sizeof(compressedAsymmetricVertex))) {
@@ -154,7 +205,7 @@ hypergraph(vertex* _V, vertex* _H, long _nv, long _mv, long _nh, long _mh,  Dele
     flags = newA(uintE,max(nv,nh));
     parallel_for(long i=0;i<max(nv,nh);i++) flags[i]=UINT_E_MAX;
   }
-  
+
   void transpose() {
     if ((sizeof(vertex) == sizeof(asymmetricVertex)) ||
         (sizeof(vertex) == sizeof(compressedAsymmetricVertex))) {
