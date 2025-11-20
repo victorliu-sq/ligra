@@ -29,6 +29,7 @@
 #include <cstring>
 #include <string>
 #include <algorithm>
+#include <chrono>
 #include "parallel.h"
 #include "gettime.h"
 #include "utils.h"
@@ -40,6 +41,7 @@
 #include "parseCommandLine.h"
 #include "index_map.h"
 #include "edgeMap_utils.h"
+
 using namespace std;
 
 //*****START FRAMEWORK*****
@@ -470,6 +472,7 @@ template<class vertex>
 void Compute(hypergraph<vertex>&, commandLine);
 
 int parallel_main(int argc, char* argv[]) {
+  // std::cout << "Hello from JX" << std::endl;
   commandLine P(argc,argv," [-s] <inFile>");
   char* iFile = P.getArgument(0);
   bool symmetric = P.getOptionValue("-s");
@@ -487,6 +490,8 @@ int parallel_main(int argc, char* argv[]) {
       hypergraph<compressedSymmetricVertex> G =
         readCompressedHypergraph<compressedSymmetricVertex>(iFile,symmetric,mmap); //symmetric graph
 #endif
+
+      std::cout << "Hello from JX - 1 " << std::endl;
       // Compute(G,P);
       for(int r=0;r<rounds;r++) {
         startTime();
@@ -502,6 +507,7 @@ int parallel_main(int argc, char* argv[]) {
       hypergraph<compressedAsymmetricVertex> G =
         readCompressedHypergraph<compressedAsymmetricVertex>(iFile,symmetric,mmap); //asymmetric graph
 #endif
+      std::cout << "Hello from JX - 2 " << std::endl;
       // Compute(G,P);
       if(G.transposed) G.transpose();
       for(int r=0;r<rounds;r++) {
@@ -521,11 +527,23 @@ int parallel_main(int argc, char* argv[]) {
       hypergraph<symmetricVertex> G =
         readHypergraph<symmetricVertex>(iFile,compressed,symmetric,binary,mmap); //symmetric graph
 #endif
+
+      std::cout << "Hello from JX - 3 " << std::endl;
       // Compute(G,P);
       for(int r=0;r<rounds;r++) {
-        startTime();
+        // startTime();
+        auto start = std::chrono::high_resolution_clock::now();
+
         Compute(G,P);
-        nextTime("Running time");
+
+        // nextTime("Running time");
+        auto end = std::chrono::high_resolution_clock::now();
+
+        // Calculate the duration
+        std::chrono::duration<double> duration = end - start;
+
+        // Print the time taken
+        std::cout << "Running time " << duration.count() << std::endl;
       }
       G.del();
     } else {
@@ -536,6 +554,8 @@ int parallel_main(int argc, char* argv[]) {
       hypergraph<asymmetricVertex> G =
         readHypergraph<asymmetricVertex>(iFile,compressed,symmetric,binary,mmap); //asymmetric graph
 #endif
+
+      std::cout << "Hello from JX - 4 " << std::endl;
       // Compute(G,P);
       if(G.transposed) G.transpose();
       for(int r=0;r<rounds;r++) {
