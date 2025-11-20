@@ -472,7 +472,7 @@ void Compute(hypergraph<vertex>&, commandLine);
 
 // Flush all CPU caches by streaming through a large buffer.
 void flush_all_caches() {
-    const size_t size = 2ULL * 1024ULL * 1024ULL * 1024ULL;  // 2 GB
+    const size_t size = 8ULL * 1024ULL * 1024ULL * 1024ULL;  // 8 GB
     static uint8_t *trash = nullptr;
 
     if (!trash) {
