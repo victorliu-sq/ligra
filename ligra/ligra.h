@@ -543,7 +543,7 @@ int parallel_main(int argc, char* argv[]) {
         std::chrono::duration<double> duration = end - start;
 
         // Print the time taken
-        std::cout << "Running time " << duration.count() << std::endl;
+        std::cout << "Running time" << " : " << duration.count() << std::endl;
       }
       G.del();
     } else {
