@@ -489,7 +489,6 @@ int parallel_main(int argc, char* argv[]) {
         readCompressedHypergraph<compressedSymmetricVertex>(iFile,symmetric,mmap); //symmetric graph
 #endif
 
-      std::cout << "Hello from JX - 1 " << std::endl;
       // Compute(G,P);
 
       for(int r=0;r<rounds;r++) {
@@ -506,7 +505,6 @@ int parallel_main(int argc, char* argv[]) {
       hypergraph<compressedAsymmetricVertex> G =
         readCompressedHypergraph<compressedAsymmetricVertex>(iFile,symmetric,mmap); //asymmetric graph
 #endif
-      std::cout << "Hello from JX - 2 " << std::endl;
       // Compute(G,P);
       if(G.transposed) G.transpose();
       for(int r=0;r<rounds;r++) {
@@ -544,7 +542,6 @@ int parallel_main(int argc, char* argv[]) {
         readHypergraph<asymmetricVertex>(iFile,compressed,symmetric,binary,mmap); //asymmetric graph
 #endif
 
-      std::cout << "Hello from JX - 4 " << std::endl;
       // Compute(G,P);
       if(G.transposed) G.transpose();
       for(int r=0;r<rounds;r++) {
