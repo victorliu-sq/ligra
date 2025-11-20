@@ -470,6 +470,24 @@ void Compute(graph<vertex>&, commandLine);
 template<class vertex>
 void Compute(hypergraph<vertex>&, commandLine);
 
+// Flush all CPU caches by streaming through a large buffer.
+void flush_all_caches() {
+    const size_t size = 2ULL * 1024ULL * 1024ULL * 1024ULL;  // 2 GB
+    static uint8_t *trash = nullptr;
+
+    if (!trash) {
+        // Allocate aligned memory
+        trash = (uint8_t*) aligned_alloc(64, size);
+        memset(trash, 1, size);  // touch once so it's allocated
+    }
+
+    // Walk the buffer, touching 1 byte per 64B cache line.
+    for (size_t i = 0; i < size; i += 64) {
+        trash[i]++;
+    }
+}
+
+
 int parallel_main(int argc, char* argv[]) {
   commandLine P(argc,argv," [-s] <inFile>");
   char* iFile = P.getArgument(0);
@@ -524,6 +542,9 @@ int parallel_main(int argc, char* argv[]) {
       hypergraph<symmetricVertex> G =
         readHypergraph<symmetricVertex>(iFile,compressed,symmetric,binary,mmap); //symmetric graph
 #endif
+
+      // Start
+      flush_all_caches();
 
       // Compute(G,P);
       for(int r=0;r<rounds;r++) {
