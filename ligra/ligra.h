@@ -544,7 +544,7 @@ int parallel_main(int argc, char* argv[]) {
 #endif
 
       // Start
-      flush_all_caches();
+      // flush_all_caches();
 
       // Compute(G,P);
       for(int r=0;r<rounds;r++) {
