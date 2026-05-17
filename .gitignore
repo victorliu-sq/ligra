@@ -1,1 +1,26 @@
 .idea/
+
+# Generated Ligra symlinks
+apps/sequence.h
+apps/transpose.h
+apps/utils.h
+apps/vertex.h
+apps/vertexSubset.h
+
+# Generated Ligra app binaries
+apps/encoder
+apps/decoder
+apps/BFS
+apps/BC
+apps/BellmanFord
+apps/Components
+apps/Components-Shortcut
+apps/Radii
+apps/PageRank
+apps/PageRankDelta
+apps/BFSCC
+apps/BFS-Bitvector
+apps/KCore
+apps/MIS
+apps/Triangle
+apps/CF
