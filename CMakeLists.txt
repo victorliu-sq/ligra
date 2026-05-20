@@ -9,36 +9,24 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/bin") # output directo
 find_program(MAKE_EXECUTABLE NAMES make gmake REQUIRED)
 
 set(LIGRA_APPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/apps")
-set(LIGRA_TARGETS
-    encoder
-    decoder
-    BFS
-    BC
-    BellmanFord
-    Components
-    Components-Shortcut
-    Radii
-    PageRank
-    PageRankDelta
-    BFSCC
-    BFS-Bitvector
-    KCore
-    MIS
-    Triangle
-    CF
-)
 
-set(LIGRA_TARGET_PATHS)
-foreach(LIGRA_TARGET IN LISTS LIGRA_TARGETS)
-    list(APPEND LIGRA_TARGET_PATHS "${LIGRA_APPS_DIR}/${LIGRA_TARGET}")
-endforeach()
+function(add_ligra_openmp_app TARGET_NAME APP_NAME)
+    add_custom_target(${TARGET_NAME}
+        COMMAND "${CMAKE_COMMAND}" -E env --unset=CILK --unset=MKLROOT OPENMP=1
+                "${MAKE_EXECUTABLE}" -C "${LIGRA_APPS_DIR}" "${APP_NAME}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${LIGRA_APPS_DIR}/${APP_NAME}"
+                "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${APP_NAME}"
+        COMMENT "Build Ligra ${APP_NAME} with OpenMP"
+    )
+endfunction()
+
+add_ligra_openmp_app(ligra_bfs BFS)
+add_ligra_openmp_app(ligra_bc BC)
+add_ligra_openmp_app(ligra_cc Components)
 
 add_custom_target(ligra_openmp ALL
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=CILK --unset=MKLROOT OPENMP=1
-            "${MAKE_EXECUTABLE}" -C "${LIGRA_APPS_DIR}" clean
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=CILK --unset=MKLROOT OPENMP=1
-            "${MAKE_EXECUTABLE}" -C "${LIGRA_APPS_DIR}" -j
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
-    COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${LIGRA_TARGET_PATHS} "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
-    COMMENT "Build Ligra apps with OpenMP"
+    DEPENDS ligra_bfs ligra_bc ligra_cc
+    COMMENT "Build selected Ligra OpenMP apps: BFS, BC, Components"
 )
