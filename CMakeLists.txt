@@ -39,6 +39,9 @@ add_ligra_openmp_app(ligra_bfs BFS)
 add_ligra_openmp_app(ligra_bc BC)
 add_ligra_openmp_app(ligra_cc Components)
 add_ligra_hyper_openmp_app(ligra_hyper_sssp HyperSSSP)
+add_ligra_openmp_app(ligra_bfs_throughput BFS_Throughput)
+add_ligra_openmp_app(ligra_bc_throughput BC_Throughput)
+add_ligra_hyper_openmp_app(ligra_hyper_sssp_throughput HyperSSSP_Throughput)
 
 add_custom_target(ligra_openmp ALL
     DEPENDS ligra_bfs ligra_bc ligra_hyper_sssp
