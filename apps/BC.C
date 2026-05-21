@@ -22,6 +22,7 @@
 // OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 // WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "ligra.h"
+#include <chrono>
 #include <vector>
 
 typedef double fType;
@@ -90,7 +91,33 @@ struct BC_Back_Vertex_F {
     return 1; }};
 
 template <class vertex>
+long CountFrontierEdges(graph<vertex>& GA, vertexSubset& Frontier) {
+  long frontier_size = Frontier.numNonzeros();
+  if (frontier_size == 0) return 0;
+
+  if (Frontier.dense()) {
+    long* Degrees = newA(long, GA.n);
+    parallel_for(long i=0;i<GA.n;i++) {
+      Degrees[i] = Frontier.isIn(i) ? GA.V[i].getOutDegree() : 0;
+    }
+    long total_degree = sequence::plusReduce(Degrees, GA.n);
+    free(Degrees);
+    return total_degree;
+  }
+
+  long* Degrees = newA(long, frontier_size);
+  parallel_for(long i=0;i<frontier_size;i++) {
+    Degrees[i] = GA.V[Frontier.vtx(i)].getOutDegree();
+  }
+  long total_degree = sequence::plusReduce(Degrees, frontier_size);
+  free(Degrees);
+  return total_degree;
+}
+
+template <class vertex>
 void Compute(graph<vertex>& GA, commandLine P) {
+  auto throughput_start = std::chrono::high_resolution_clock::now();
+  long edges_processed = 0;
   long start = P.getOptionLongValue("-r",0);
   long n = GA.n;
 
@@ -109,6 +136,7 @@ void Compute(graph<vertex>& GA, commandLine P) {
   long round = 0;
   while(!Frontier.isEmpty()){ //first phase
     round++;
+    edges_processed += CountFrontierEdges(GA, Frontier);
     vertexSubset output = edgeMap(GA, Frontier, BC_F(NumPaths,Visited));
     vertexMap(output, BC_Vertex_F(Visited)); //mark visited
     Levels.push_back(output); //save frontier onto Levels
@@ -131,6 +159,7 @@ void Compute(graph<vertex>& GA, commandLine P) {
   //tranpose graph
   GA.transpose();
   for(long r=round-2;r>=0;r--) { //backwards phase
+    edges_processed += CountFrontierEdges(GA, Frontier);
     edgeMap(GA, Frontier, BC_Back_F(Dependencies,Visited), -1, no_output);
     Frontier.del();
     Frontier = Levels[r]; //gets frontier from Levels array
@@ -147,4 +176,12 @@ void Compute(graph<vertex>& GA, commandLine P) {
   free(inverseNumPaths);
   free(Visited);
   free(Dependencies);
+
+  auto throughput_end = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double> runtime = throughput_end - throughput_start;
+  std::cout << "Average runtime: " << runtime.count() << std::endl;
+  std::cout << "Number of Processed Edges: " << edges_processed << std::endl;
+  std::cout << "Processed Edges per Second: "
+            << static_cast<double>(edges_processed) / runtime.count()
+            << std::endl;
 }
