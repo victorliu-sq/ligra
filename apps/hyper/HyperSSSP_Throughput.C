@@ -29,15 +29,12 @@
 struct BF_Relax_F {
   intE* ShortestPathLenSrc, *ShortestPathLenDest;
   int* Visited;
-  long* EdgesProcessed;
-  BF_Relax_F(intE* _ShortestPathLenSrc, intE* _ShortestPathLenDest, int* _Visited, long* _EdgesProcessed) :
-    ShortestPathLenSrc(_ShortestPathLenSrc), ShortestPathLenDest(_ShortestPathLenDest), Visited(_Visited),
-    EdgesProcessed(_EdgesProcessed) {}
+  BF_Relax_F(intE* _ShortestPathLenSrc, intE* _ShortestPathLenDest, int* _Visited) :
+    ShortestPathLenSrc(_ShortestPathLenSrc), ShortestPathLenDest(_ShortestPathLenDest), Visited(_Visited) {}
   inline bool update (uintE s, uintE d, intE edgeLen) { //Update ShortestPathLen if found a shorter path
     intE newDist = ShortestPathLenSrc[s] + edgeLen;
     if(ShortestPathLenDest[d] > newDist) {
       ShortestPathLenDest[d] = newDist;
-      __sync_fetch_and_add(EdgesProcessed, 1);
       if(Visited[d] == 0) { Visited[d] = 1 ; return 1;}
     }
     return 0;
@@ -45,7 +42,6 @@ struct BF_Relax_F {
   inline bool updateAtomic (uintE s, uintE d, intE edgeLen){ //atomic Update
     intE newDist = ShortestPathLenSrc[s] + edgeLen;
     bool improved = writeMin(&ShortestPathLenDest[d],newDist);
-    if (improved) __sync_fetch_and_add(EdgesProcessed, 1);
     return (improved && CAS(&Visited[d],0,1));
   }
   inline bool cond (uintE d) { return cond_true(d); }
@@ -60,6 +56,30 @@ struct BF_Reset_F {
     return 1;
   }
 };
+
+template <class vertex>
+long CountFrontierEdges(vertex* G, long n, vertexSubset& Frontier) {
+  long frontier_size = Frontier.numNonzeros();
+  if (frontier_size == 0) return 0;
+
+  if (Frontier.dense()) {
+    long* Degrees = newA(long, n);
+    parallel_for(long i=0;i<n;i++) {
+      Degrees[i] = Frontier.isIn(i) ? G[i].getOutDegree() : 0;
+    }
+    long total_degree = sequence::plusReduce(Degrees, n);
+    free(Degrees);
+    return total_degree;
+  }
+
+  long* Degrees = newA(long, frontier_size);
+  parallel_for(long i=0;i<frontier_size;i++) {
+    Degrees[i] = G[Frontier.vtx(i)].getOutDegree();
+  }
+  long total_degree = sequence::plusReduce(Degrees, frontier_size);
+  free(Degrees);
+  return total_degree;
+}
 
 template <class vertex>
 void Compute(hypergraph<vertex>& GA, commandLine P) {
@@ -87,13 +107,15 @@ void Compute(hypergraph<vertex>& GA, commandLine P) {
       break;
     }
     //cout << Frontier.numNonzeros() << endl;
-    hyperedgeSubset output = vertexProp(GA, Frontier, BF_Relax_F(ShortestPathLenV,ShortestPathLenH,Visited,&edges_processed),-1,dense_forward);
+    edges_processed += CountFrontierEdges(GA.V, GA.nv, Frontier);
+    hyperedgeSubset output = vertexProp(GA, Frontier, BF_Relax_F(ShortestPathLenV,ShortestPathLenH,Visited),-1,dense_forward);
     hyperedgeMap(output,BF_Reset_F(Visited));
     Frontier.del();
     Frontier = output;
     if(Frontier.isEmpty()) break;
     //cout << Frontier.numNonzeros() << endl;
-    output = hyperedgeProp(GA, Frontier, BF_Relax_F(ShortestPathLenH,ShortestPathLenV,Visited,&edges_processed),-1,dense_forward);
+    edges_processed += CountFrontierEdges(GA.H, GA.nh, Frontier);
+    output = hyperedgeProp(GA, Frontier, BF_Relax_F(ShortestPathLenH,ShortestPathLenV,Visited),-1,dense_forward);
     vertexMap(output,BF_Reset_F(Visited));
     Frontier.del();
     Frontier = output;

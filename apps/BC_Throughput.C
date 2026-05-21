@@ -30,13 +30,11 @@ typedef double fType;
 struct BC_F {
   fType* NumPaths;
   bool* Visited;
-  long* EdgesProcessed;
-  BC_F(fType* _NumPaths, bool* _Visited, long* _EdgesProcessed) :
-    NumPaths(_NumPaths), Visited(_Visited), EdgesProcessed(_EdgesProcessed) {}
+  BC_F(fType* _NumPaths, bool* _Visited) :
+    NumPaths(_NumPaths), Visited(_Visited) {}
   inline bool update(uintE s, uintE d){ //Update function for forward phase
     fType oldV = NumPaths[d];
     NumPaths[d] += NumPaths[s];
-    __sync_fetch_and_add(EdgesProcessed, 1);
     return oldV == 0.0;
   }
   inline bool updateAtomic (uintE s, uintE d) { //atomic Update, basically an add
@@ -44,7 +42,6 @@ struct BC_F {
     do { 
       oldV = NumPaths[d]; newV = oldV + NumPaths[s];
     } while(!CAS(&NumPaths[d],oldV,newV));
-    __sync_fetch_and_add(EdgesProcessed, 1);
     return oldV == 0.0;
   }
   inline bool cond (uintE d) { return Visited[d] == 0; } //check if visited
@@ -53,13 +50,11 @@ struct BC_F {
 struct BC_Back_F {
   fType* Dependencies;
   bool* Visited;
-  long* EdgesProcessed;
-  BC_Back_F(fType* _Dependencies, bool* _Visited, long* _EdgesProcessed) :
-    Dependencies(_Dependencies), Visited(_Visited), EdgesProcessed(_EdgesProcessed) {}
+  BC_Back_F(fType* _Dependencies, bool* _Visited) :
+    Dependencies(_Dependencies), Visited(_Visited) {}
   inline bool update(uintE s, uintE d){ //Update function for backwards phase
     fType oldV = Dependencies[d];
     Dependencies[d] += Dependencies[s];
-    __sync_fetch_and_add(EdgesProcessed, 1);
     return oldV == 0.0;
   }
   inline bool updateAtomic (uintE s, uintE d) { //atomic Update
@@ -68,7 +63,6 @@ struct BC_Back_F {
       oldV = Dependencies[d];
       newV = oldV + Dependencies[s];
     } while(!CAS(&Dependencies[d],oldV,newV));
-    __sync_fetch_and_add(EdgesProcessed, 1);
     return oldV == 0.0;
   }
   inline bool cond (uintE d) { return Visited[d] == 0; } //check if visited
@@ -97,6 +91,30 @@ struct BC_Back_Vertex_F {
     return 1; }};
 
 template <class vertex>
+long CountFrontierEdges(graph<vertex>& GA, vertexSubset& Frontier) {
+  long frontier_size = Frontier.numNonzeros();
+  if (frontier_size == 0) return 0;
+
+  if (Frontier.dense()) {
+    long* Degrees = newA(long, GA.n);
+    parallel_for(long i=0;i<GA.n;i++) {
+      Degrees[i] = Frontier.isIn(i) ? GA.V[i].getOutDegree() : 0;
+    }
+    long total_degree = sequence::plusReduce(Degrees, GA.n);
+    free(Degrees);
+    return total_degree;
+  }
+
+  long* Degrees = newA(long, frontier_size);
+  parallel_for(long i=0;i<frontier_size;i++) {
+    Degrees[i] = GA.V[Frontier.vtx(i)].getOutDegree();
+  }
+  long total_degree = sequence::plusReduce(Degrees, frontier_size);
+  free(Degrees);
+  return total_degree;
+}
+
+template <class vertex>
 void Compute(graph<vertex>& GA, commandLine P) {
   auto throughput_start = std::chrono::high_resolution_clock::now();
   long edges_processed = 0;
@@ -118,7 +136,8 @@ void Compute(graph<vertex>& GA, commandLine P) {
   long round = 0;
   while(!Frontier.isEmpty()){ //first phase
     round++;
-    vertexSubset output = edgeMap(GA, Frontier, BC_F(NumPaths,Visited,&edges_processed));
+    edges_processed += CountFrontierEdges(GA, Frontier);
+    vertexSubset output = edgeMap(GA, Frontier, BC_F(NumPaths,Visited));
     vertexMap(output, BC_Vertex_F(Visited)); //mark visited
     Levels.push_back(output); //save frontier onto Levels
     Frontier = output;
@@ -140,7 +159,8 @@ void Compute(graph<vertex>& GA, commandLine P) {
   //tranpose graph
   GA.transpose();
   for(long r=round-2;r>=0;r--) { //backwards phase
-    edgeMap(GA, Frontier, BC_Back_F(Dependencies,Visited,&edges_processed), -1, no_output);
+    edges_processed += CountFrontierEdges(GA, Frontier);
+    edgeMap(GA, Frontier, BC_Back_F(Dependencies,Visited), -1, no_output);
     Frontier.del();
     Frontier = Levels[r]; //gets frontier from Levels array
     //vertex map to mark visited and update Dependencies scores
