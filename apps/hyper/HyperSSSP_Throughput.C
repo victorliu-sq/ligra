@@ -114,7 +114,9 @@ void Compute(hypergraph<vertex>& GA, commandLine P) {
     Frontier = output;
     if(Frontier.isEmpty()) break;
     //cout << Frontier.numNonzeros() << endl;
-    edges_processed += CountFrontierEdges(GA.H, GA.nh, Frontier);
+
+    // only count once for each csr edge instead of hyper edge
+    // edges_processed += CountFrontierEdges(GA.H, GA.nh, Frontier);
     output = hyperedgeProp(GA, Frontier, BF_Relax_F(ShortestPathLenH,ShortestPathLenV,Visited),-1,dense_forward);
     vertexMap(output,BF_Reset_F(Visited));
     Frontier.del();
