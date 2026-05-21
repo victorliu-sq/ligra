@@ -24,6 +24,7 @@
 #define HYPER 1
 #define WEIGHTED 1
 #include "hygra.h"
+#include <chrono>
 
 struct BF_Relax_F {
   intE* ShortestPathLenSrc, *ShortestPathLenDest;
@@ -57,7 +58,33 @@ struct BF_Reset_F {
 };
 
 template <class vertex>
+long CountFrontierEdges(vertex* G, long n, vertexSubset& Frontier) {
+  long frontier_size = Frontier.numNonzeros();
+  if (frontier_size == 0) return 0;
+
+  if (Frontier.dense()) {
+    long* Degrees = newA(long, n);
+    parallel_for(long i=0;i<n;i++) {
+      Degrees[i] = Frontier.isIn(i) ? G[i].getOutDegree() : 0;
+    }
+    long total_degree = sequence::plusReduce(Degrees, n);
+    free(Degrees);
+    return total_degree;
+  }
+
+  long* Degrees = newA(long, frontier_size);
+  parallel_for(long i=0;i<frontier_size;i++) {
+    Degrees[i] = G[Frontier.vtx(i)].getOutDegree();
+  }
+  long total_degree = sequence::plusReduce(Degrees, frontier_size);
+  free(Degrees);
+  return total_degree;
+}
+
+template <class vertex>
 void Compute(hypergraph<vertex>& GA, commandLine P) {
+  auto throughput_start = std::chrono::high_resolution_clock::now();
+  long edges_processed = 0;
   long start = P.getOptionLongValue("-r",0);
   long nv = GA.nv, nh = GA.nh;
   //initialize ShortestPathLen to "infinity"
@@ -80,12 +107,14 @@ void Compute(hypergraph<vertex>& GA, commandLine P) {
       break;
     }
     //cout << Frontier.numNonzeros() << endl;
+    edges_processed += CountFrontierEdges(GA.V, GA.nv, Frontier);
     hyperedgeSubset output = vertexProp(GA, Frontier, BF_Relax_F(ShortestPathLenV,ShortestPathLenH,Visited),-1,dense_forward);
     hyperedgeMap(output,BF_Reset_F(Visited));
     Frontier.del();
     Frontier = output;
     if(Frontier.isEmpty()) break;
     //cout << Frontier.numNonzeros() << endl;
+    edges_processed += CountFrontierEdges(GA.H, GA.nh, Frontier);
     output = hyperedgeProp(GA, Frontier, BF_Relax_F(ShortestPathLenH,ShortestPathLenV,Visited),-1,dense_forward);
     vertexMap(output,BF_Reset_F(Visited));
     Frontier.del();
@@ -95,4 +124,12 @@ void Compute(hypergraph<vertex>& GA, commandLine P) {
   }
   Frontier.del(); free(Visited);
   free(ShortestPathLenV); free(ShortestPathLenH);
+
+  auto throughput_end = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double> runtime = throughput_end - throughput_start;
+  std::cout << "Average runtime: " << runtime.count() << std::endl;
+  std::cout << "Number of Processed Edges: " << edges_processed << std::endl;
+  std::cout << "Processed Edges per Second: "
+            << static_cast<double>(edges_processed) / runtime.count()
+            << std::endl;
 }
