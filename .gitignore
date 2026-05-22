@@ -70,6 +70,7 @@ apps/hyper/WeightedHyperReader
 apps/hyper/HyperBFS
 apps/hyper/HyperCC
 apps/hyper/HyperSSSP
+apps/SSSP
 apps/hyper/HyperPageRank
 apps/hyper/HyperBC
 apps/hyper/HyperBPath
