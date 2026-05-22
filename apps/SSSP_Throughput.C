@@ -2,14 +2,17 @@
 #define WEIGHTED 1
 #include "ligra.h"
 #include <chrono>
+#include <limits>
+
+typedef float weightT;
 
 struct SSSP_F {
-  intE* Dist;
+  weightT* Dist;
   int* Visited;
-  SSSP_F(intE* _Dist, int* _Visited) : Dist(_Dist), Visited(_Visited) {}
+  SSSP_F(weightT* _Dist, int* _Visited) : Dist(_Dist), Visited(_Visited) {}
 
   inline bool update(uintE s, uintE d, intE edgeLen) {
-    intE newDist = Dist[s] + edgeLen;
+    weightT newDist = Dist[s] + static_cast<weightT>(edgeLen);
     if (Dist[d] > newDist) {
       Dist[d] = newDist;
       if (Visited[d] == 0) {
@@ -21,7 +24,7 @@ struct SSSP_F {
   }
 
   inline bool updateAtomic(uintE s, uintE d, intE edgeLen) {
-    intE newDist = Dist[s] + edgeLen;
+    weightT newDist = Dist[s] + static_cast<weightT>(edgeLen);
     bool improved = writeMin(&Dist[d], newDist);
     return improved && CAS(&Visited[d], 0, 1);
   }
@@ -69,8 +72,8 @@ void Compute(graph<vertex>& GA, commandLine P) {
   long start = P.getOptionLongValue("-r", 0);
   long n = GA.n;
 
-  intE* Dist = newA(intE, n);
-  parallel_for(long i = 0; i < n; i++) Dist[i] = INT_MAX / 2;
+  weightT* Dist = newA(weightT, n);
+  parallel_for(long i = 0; i < n; i++) Dist[i] = std::numeric_limits<weightT>::max() / 4;
   Dist[start] = 0;
 
   int* Visited = newA(int, n);
@@ -80,7 +83,7 @@ void Compute(graph<vertex>& GA, commandLine P) {
   long round = 0;
   while (!Frontier.isEmpty()) {
     if (round == n) {
-      parallel_for(long i = 0; i < n; i++) Dist[i] = -(INT_E_MAX / 2);
+      parallel_for(long i = 0; i < n; i++) Dist[i] = -(std::numeric_limits<weightT>::max() / 4);
       break;
     }
     edges_processed += CountFrontierEdges(GA, Frontier);

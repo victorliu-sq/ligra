@@ -24,7 +24,7 @@
 #include "ligra.h"
 #include <vector>
 
-typedef double fType;
+typedef float fType;
 
 struct BC_F {
   fType* NumPaths;
