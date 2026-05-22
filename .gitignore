@@ -71,6 +71,7 @@ apps/hyper/HyperBFS
 apps/hyper/HyperCC
 apps/hyper/HyperSSSP
 apps/SSSP
+apps/SSSP_Throughput
 apps/hyper/HyperPageRank
 apps/hyper/HyperBC
 apps/hyper/HyperBPath
