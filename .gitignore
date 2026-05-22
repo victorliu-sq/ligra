@@ -24,6 +24,8 @@ apps/KCore
 apps/MIS
 apps/Triangle
 apps/CF
+apps/BC_Throughput
+apps/BFS_Throughput
 
 # Generated Hygra symlinks
 apps/hyper/IO.h
