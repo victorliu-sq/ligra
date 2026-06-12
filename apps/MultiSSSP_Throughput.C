@@ -1,17 +1,21 @@
 // Multi-source SSSP throughput variant for standard weighted adjacency graphs.
-// Sources are read from -srcs <file>, one vertex id per line; lines beginning
-// with '#' are ignored. If -srcs is omitted, -r <source> is used.
+// Sources are provided either by --src 0 1 3 or randomly by --src-count 10.
 #define WEIGHTED 1
 #include "ligra.h"
+#include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <limits>
+#include <random>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 
 using std::string;
 
 typedef float weightT;
+static double source_setup_seconds = 0.0;
 
 struct SSSP_F {
   weightT* Dist;
@@ -48,13 +52,71 @@ struct Reset_F {
   }
 };
 
-static bool parse_source_line(const string& line, long* source) {
-  string trimmed = line;
-  size_t first = trimmed.find_first_not_of(" \t\r\n");
-  if (first == string::npos || trimmed[first] == '#') return false;
+static void add_source(long source, const string& context, bool* sources,
+                       weightT* Dist, long n, long* source_count) {
+  if (source < 0 || source >= n) {
+    std::cerr << "Source vertex out of range in " << context << ": "
+              << source << std::endl;
+    abort();
+  }
+  if (!sources[source]) {
+    sources[source] = true;
+    Dist[source] = 0;
+    (*source_count)++;
+  }
+}
 
-  std::istringstream in(trimmed.substr(first));
-  return static_cast<bool>(in >> *source);
+static void parse_source_text(string text, const string& context, bool* sources,
+                              weightT* Dist, long n, long* source_count) {
+  std::replace(text.begin(), text.end(), ',', ' ');
+  std::istringstream in(text);
+  string token;
+  while (in >> token) {
+    char* end = NULL;
+    long source = std::strtol(token.c_str(), &end, 10);
+    if (end == token.c_str() || *end != '\0') {
+      std::cerr << "Invalid source vertex in " << context << ": "
+                << token << std::endl;
+      abort();
+    }
+    add_source(source, context, sources, Dist, n, source_count);
+  }
+}
+
+static void add_random_sources(long requested_count, bool* sources,
+                               weightT* Dist, long n, long* source_count) {
+  if (requested_count <= 0 || requested_count > n) {
+    std::cerr << "--src-count must be between 1 and the number of graph vertices ("
+              << n << "): " << requested_count << std::endl;
+    abort();
+  }
+
+  std::unordered_set<long> selected;
+  selected.reserve(requested_count);
+  std::random_device seed;
+  std::mt19937_64 engine(seed());
+  std::uniform_int_distribution<long> dist(0, n - 1);
+
+  while (static_cast<long>(selected.size()) < requested_count) {
+    selected.insert(dist(engine));
+  }
+
+  for (long source : selected) {
+    add_source(source, "--src-count", sources, Dist, n, source_count);
+  }
+}
+
+static void add_random_sources_untimed(long requested_count, bool* sources,
+                                       weightT* Dist, long n,
+                                       long* source_count) {
+  bool timer_was_on = _tm.on;
+  if (timer_was_on) _tm.stop();
+  auto setup_start = std::chrono::high_resolution_clock::now();
+  add_random_sources(requested_count, sources, Dist, n, source_count);
+  auto setup_end = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double> setup_time = setup_end - setup_start;
+  source_setup_seconds += setup_time.count();
+  if (timer_was_on) _tm.start();
 }
 
 static vertexSubset make_initial_frontier(commandLine& P, weightT* Dist, long n) {
@@ -62,38 +124,37 @@ static vertexSubset make_initial_frontier(commandLine& P, weightT* Dist, long n)
   parallel_for(long i = 0; i < n; i++) sources[i] = false;
   long source_count = 0;
 
-  char* sources_path = P.getOptionValue("-srcs");
-  if (sources_path != NULL) {
-    std::ifstream in(sources_path);
-    if (!in) {
-      std::cerr << "Could not open MultiSSSP source file: " << sources_path << std::endl;
-      abort();
+  char* source_count_spec = P.getOptionValue("--src-count");
+  bool explicit_sources = false;
+  for (int i = 1; i < P.argc - 1; i++) {
+    string arg = P.argv[i];
+    if (arg == "--src" || arg == "-srcs") {
+      explicit_sources = true;
+      i++;
+      while (i < P.argc - 1 && P.argv[i][0] != '-') {
+        parse_source_text(P.argv[i], "--src", sources, Dist, n, &source_count);
+        i++;
+      }
+      i--;
     }
+  }
 
-    string line;
-    while (std::getline(in, line)) {
-      long source = 0;
-      if (!parse_source_line(line, &source)) continue;
-      if (source < 0 || source >= n) {
-        std::cerr << "Source vertex out of range in " << sources_path << ": "
-                  << source << std::endl;
-        abort();
-      }
-      if (!sources[source]) {
-        sources[source] = true;
-        Dist[source] = 0;
-        source_count++;
-      }
-    }
-  } else {
-    long source = P.getOptionLongValue("-r", 0);
-    if (source < 0 || source >= n) {
-      std::cerr << "Source vertex out of range: " << source << std::endl;
+  if (explicit_sources && source_count_spec != NULL) {
+    std::cerr << "Use either --src or --src-count, not both" << std::endl;
+    abort();
+  }
+
+  if (source_count_spec != NULL) {
+    char* end = NULL;
+    long requested_count = std::strtol(source_count_spec, &end, 10);
+    if (end == source_count_spec || *end != '\0') {
+      std::cerr << "Invalid --src-count value: " << source_count_spec << std::endl;
       abort();
     }
-    sources[source] = true;
-    Dist[source] = 0;
-    source_count = 1;
+    add_random_sources_untimed(requested_count, sources, Dist, n, &source_count);
+  } else if (!explicit_sources) {
+    long source = P.getOptionLongValue("-r", 0);
+    add_source(source, "-r", sources, Dist, n, &source_count);
   }
 
   if (source_count == 0) {
@@ -130,6 +191,7 @@ long CountFrontierEdges(graph<vertex>& GA, vertexSubset& Frontier) {
 
 template <class vertex>
 void Compute(graph<vertex>& GA, commandLine P) {
+  source_setup_seconds = 0.0;
   auto throughput_start = std::chrono::high_resolution_clock::now();
   long edges_processed = 0;
   long n = GA.n;
@@ -164,9 +226,11 @@ void Compute(graph<vertex>& GA, commandLine P) {
 
   auto throughput_end = std::chrono::high_resolution_clock::now();
   std::chrono::duration<double> runtime = throughput_end - throughput_start;
-  std::cout << "Average runtime: " << runtime.count() << std::endl;
+  double algorithm_runtime = runtime.count() - source_setup_seconds;
+  if (algorithm_runtime <= 0.0) algorithm_runtime = runtime.count();
+  std::cout << "Average runtime: " << algorithm_runtime << std::endl;
   std::cout << "Number of Processed Edges: " << edges_processed << std::endl;
   std::cout << "Processed Edges per Second: "
-            << static_cast<double>(edges_processed) / runtime.count()
+            << static_cast<double>(edges_processed) / algorithm_runtime
             << std::endl;
 }
