@@ -212,8 +212,7 @@ void Compute(graph<vertex>& GA, commandLine P) {
       break;
     }
     edges_processed += CountFrontierEdges(GA, Frontier);
-    vertexSubset output =
-        edgeMap(GA, Frontier, SSSP_F(Dist, Visited), GA.m / 20, dense_forward);
+    vertexSubset output = edgeMap(GA, Frontier, SSSP_F(Dist, Visited));
     vertexMap(output, Reset_F(Visited));
     Frontier.del();
     Frontier = output;

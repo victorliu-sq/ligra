@@ -75,8 +75,7 @@ void Compute(graph<vertex>& GA, commandLine P) {
       parallel_for(long i = 0; i < n; i++) Dist[i] = -(std::numeric_limits<weightT>::max() / 4);
       break;
     }
-    vertexSubset output =
-        edgeMap(GA, Frontier, SSSP_F(Dist, Visited), GA.m / 20, dense_forward);
+    vertexSubset output = edgeMap(GA, Frontier, SSSP_F(Dist, Visited));
     vertexMap(output, Reset_F(Visited));
     Frontier.del();
     Frontier = output;
