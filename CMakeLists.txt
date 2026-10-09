@@ -33,6 +33,8 @@ add_ligra_openmp_app(ligra_bc_throughput BC_Throughput)
 add_ligra_openmp_app(ligra_sssp_throughput SSSP_Throughput)
 # X-Blossom-Pro maximum matching written as a Ligra app (apps/XBlossomPro.C).
 add_ligra_openmp_app(ligra_xblossom_pro XBlossomPro)
+# The same with dynamic OpenMP scheduling (load-balance experiment).
+add_ligra_openmp_app(ligra_xblossom_pro_dyn XBlossomPro_dyn)
 
 add_custom_target(ligra_openmp ALL
     DEPENDS ligra_bfs ligra_bc ligra_sssp ligra_multisssp

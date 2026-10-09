@@ -50,6 +50,10 @@ all: $(ALL)
 % : %.C $(COMMON)
 	$(PCC) $(PCFLAGS) -o $@ $<
 
+# XBlossomPro with dynamic OpenMP scheduling (load-balance experiment).
+XBlossomPro_dyn : XBlossomPro.C $(COMMON)
+	$(PCC) $(PCFLAGS) -DLIGRA_OMP_DYNAMIC -o $@ $<
+
 $(COMMON):
 	ln -s ../ligra/$@ .
 
