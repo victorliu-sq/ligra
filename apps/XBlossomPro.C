@@ -61,7 +61,8 @@ struct State {
 
   std::vector<std::vector<int>> paths;  // augmenting paths of this phase
   std::mutex paths_mutex;
-  std::atomic<bool> contended{false};
+  // Frontier nodes whose scan gave up a cross-tree edge under contention, per worker.
+  std::vector<std::vector<uintE>> dropped;
 
   // Nodes produced by expand / blossom, one buffer per worker (as XB-Pro's
   // thread-local vectors: one shared counter would make every emit contend).
@@ -69,7 +70,7 @@ struct State {
 
   explicit State(long n_) : n(n_), M(n_, -1), is_even(n_, 0), belongs(n_, -1), blossom_to_base(n_, -1),
                             path_table(n_), select_tree(n_), select_match(n_), select_blossom(n_),
-                            out(std::max(1, getWorkers())) {
+                            dropped(std::max(1, getWorkers())), out(std::max(1, getWorkers())) {
     for (auto &p : path_table) p.reserve(100);  // as XB-Pro: limits reallocation under concurrent readers
   }
 
@@ -97,13 +98,13 @@ struct Augment_F {
     if (tv == tw || tv == -1 || tw == -1) return false;
     int expected = 0;
     if (!S.select_tree[tv].compare_exchange_strong(expected, 1)) {
-      S.contended.store(true, std::memory_order_relaxed);
+      S.dropped[WorkerId()].push_back(v);
       return false;
     }
     if (!S.select_tree[tw].compare_exchange_strong(expected, 1)) {
       int taken = 1;
       S.select_tree[tv].compare_exchange_strong(taken, 0);
-      S.contended.store(true, std::memory_order_relaxed);
+      S.dropped[WorkerId()].push_back(v);
       return false;
     }
     std::vector<int> pv = PathToRoot(S, v), pw = PathToRoot(S, w);
@@ -262,16 +263,26 @@ static void SearchPhase(graph<vertex> &GA, State &S) {
   std::vector<uintE> frontier(v1);
   frontier.insert(frontier.end(), v2.begin(), v2.end());
   while (true) {
-    // 1. Augment. A pass that found nothing but gave up contended edges is not
-    // conclusive (two workers on the two ends of one edge can both back off);
-    // rerun it, the third time on one worker, which cannot contend.
-    S.contended = false;
+    // 1. Augment. Two workers on the two ends of one edge can each claim one
+    // tree, fail on the other and both back off, so neither records the path.
+    // If the pass found nothing, every claim was released: rescanning the nodes
+    // that gave up an edge on one worker (which cannot contend) settles it.
+    for (auto &d : S.dropped) d.clear();
     Step(GA, frontier, Augment_F(S));
-    for (int retry = 0; S.paths.empty() && S.contended.exchange(false); retry++) {
-      int workers = getWorkers();
-      if (retry >= 2) setWorkers(1);
-      Step(GA, frontier, Augment_F(S));
-      if (retry >= 2) setWorkers(workers);
+    if (S.paths.empty()) {
+      std::vector<uintE> rescan;
+      for (auto &d : S.dropped) {
+        rescan.insert(rescan.end(), d.begin(), d.end());
+        d.clear();
+      }
+      if (!rescan.empty()) {
+        std::sort(rescan.begin(), rescan.end());
+        rescan.erase(std::unique(rescan.begin(), rescan.end()), rescan.end());
+        int workers = getWorkers();
+        setWorkers(1);
+        Step(GA, rescan, Augment_F(S));
+        setWorkers(workers);
+      }
     }
     if (!S.paths.empty()) return;
 
