@@ -31,6 +31,8 @@ add_ligra_openmp_app(ligra_multisssp_throughput MultiSSSP_Throughput)
 add_ligra_openmp_app(ligra_bfs_throughput BFS_Throughput)
 add_ligra_openmp_app(ligra_bc_throughput BC_Throughput)
 add_ligra_openmp_app(ligra_sssp_throughput SSSP_Throughput)
+# X-Blossom-Pro maximum matching written as a Ligra app (apps/XBlossomPro.C).
+add_ligra_openmp_app(ligra_xblossom_pro XBlossomPro)
 
 add_custom_target(ligra_openmp ALL
     DEPENDS ligra_bfs ligra_bc ligra_sssp ligra_multisssp
