@@ -97,13 +97,7 @@ static void setWorkers(int n) {
 #define cilk_spawn
 #define cilk_sync
 #define parallel_main main
-// LIGRA_OMP_DYNAMIC (experiments only): hand out loop iterations in dynamic
-// chunks of 64 instead of the compiler's default static split.
-#if defined(LIGRA_OMP_DYNAMIC)
-#define parallel_for _Pragma("omp parallel for schedule (dynamic,64)") for
-#else
 #define parallel_for _Pragma("omp parallel for") for
-#endif
 #define parallel_for_1 _Pragma("omp parallel for schedule (static,1)") for
 #define parallel_for_256 _Pragma("omp parallel for schedule (static,256)") for
 static int getWorkers() { return omp_get_max_threads(); }

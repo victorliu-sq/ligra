@@ -27,17 +27,12 @@
 //   XBResult: status matching_size valid rounds mean_runtime_s
 // Each Ligra round is one full matching from scratch; the first -warmup rounds
 // are untimed warm-ups, so -rounds is warm-up + timed rounds.
-//   ./XBlossomPro -s -rounds 11 -warmup 1 -dataset Amazon <adj file>
+//   CILK_NWORKERS=<n> ./XBlossomPro_cilk -s -rounds 11 -warmup 1 -dataset Amazon <adj file>
+// (built with OpenCilk: make XBlossomPro_cilk; without it the app runs serially)
 #include "ligra.h"
 
 #if defined(OPENCILK)
 static inline int WorkerId() { return __cilkrts_get_worker_number(); }
-#elif defined(OPENMP)
-#include <omp.h>
-// The outermost parallel region's thread number. edgeMap visits a high-degree
-// node's edges in a nested (inactive) region, where omp_get_thread_num() is 0
-// for every outer thread.
-static inline int WorkerId() { return omp_get_level() >= 1 ? omp_get_ancestor_thread_num(1) : 0; }
 #else
 static inline int WorkerId() { return 0; }
 #endif

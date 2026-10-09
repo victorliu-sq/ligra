@@ -32,10 +32,6 @@ else ifdef MKLROOT
 PCC = icpc
 PCFLAGS = -std=c++14 -O3 -DCILKP $(INTT) $(INTE) $(CODE) $(PD) $(MEM)
 
-else ifdef OPENMP
-PCC = g++
-PCFLAGS = -std=c++14 -fopenmp -march=native -O3 -DOPENMP $(INTT) $(INTE) $(CODE) $(PD) $(MEM)
-
 else
 PCC = g++
 PCFLAGS = -std=c++14 -O3 $(INTT) $(INTE) $(CODE) $(PD) $(MEM)
@@ -43,7 +39,7 @@ endif
 
 COMMON= ligra.h graph.h compressedVertex.h vertex.h utils.h IO.h parallel.h gettime.h index_map.h maybe.h sequence.h edgeMap_utils.h binary_search.h quickSort.h blockRadixSort.h transpose.h parseCommandLine.h byte.h byteRLE.h nibble.h byte-pd.h byteRLE-pd.h nibble-pd.h vertexSubset.h encoder.C decoder.C
 
-ALL= encoder decoder BFS BC SSSP SSSP_Throughput MultiSSSP MultiSSSP_Throughput XBlossomPro BellmanFord Components Components-Shortcut Radii PageRank PageRankDelta BFSCC BFS-Bitvector KCore MIS Triangle CF
+ALL= encoder decoder BFS BC SSSP SSSP_Throughput MultiSSSP MultiSSSP_Throughput BellmanFord Components Components-Shortcut Radii PageRank PageRankDelta BFSCC BFS-Bitvector KCore MIS Triangle CF
 
 all: $(ALL)
 
@@ -51,14 +47,10 @@ all: $(ALL)
 	$(PCC) $(PCFLAGS) -o $@ $<
 
 # <app>_cilk: the app built with OpenCilk (clang -fopencilk, work-stealing
-# runtime) instead of OpenMP; OPENCILK_HOME is the install (deps/opencilk).
+# runtime), the build GACGE uses; OPENCILK_HOME is the install (deps/opencilk).
 OPENCILK_HOME ?= ../../../deps/opencilk
 %_cilk : %.C $(COMMON)
 	$(OPENCILK_HOME)/bin/clang++ -std=c++14 -fopencilk -march=native -O3 -DOPENCILK $(INTT) $(INTE) $(CODE) $(PD) $(MEM) -o $@ $<
-
-# XBlossomPro with dynamic OpenMP scheduling (load-balance experiment).
-XBlossomPro_dyn : XBlossomPro.C $(COMMON)
-	$(PCC) $(PCFLAGS) -DLIGRA_OMP_DYNAMIC -o $@ $<
 
 $(COMMON):
 	ln -s ../ligra/$@ .
