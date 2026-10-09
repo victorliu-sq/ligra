@@ -30,6 +30,13 @@
 //   ./XBlossomPro -s -rounds 11 -warmup 1 -dataset Amazon <adj file>
 #include "ligra.h"
 
+#if defined(OPENMP)
+#include <omp.h>
+static inline int WorkerId() { return omp_get_thread_num(); }
+#else
+static inline int WorkerId() { return 0; }
+#endif
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -53,15 +60,17 @@ struct State {
   std::mutex paths_mutex;
   std::atomic<bool> contended{false};
 
-  std::vector<uintE> out;  // nodes produced by expand / blossom
-  std::atomic<long> out_n{0};
+  // Nodes produced by expand / blossom, one buffer per worker (as XB-Pro's
+  // thread-local vectors: one shared counter would make every emit contend).
+  std::vector<std::vector<uintE>> out;
 
   explicit State(long n_) : n(n_), M(n_, -1), is_even(n_, 0), belongs(n_, -1), blossom_to_base(n_, -1),
-                            path_table(n_), select_tree(n_), select_match(n_), select_blossom(n_), out(n_) {
+                            path_table(n_), select_tree(n_), select_match(n_), select_blossom(n_),
+                            out(std::max(1, getWorkers())) {
     for (auto &p : path_table) p.reserve(100);  // as XB-Pro: limits reallocation under concurrent readers
   }
 
-  void emit(int v) { out[out_n.fetch_add(1, std::memory_order_relaxed)] = v; }
+  void emit(int v) { out[WorkerId()].push_back(v); }
 };
 
 static std::vector<int> PathToRoot(const State &S, int v) {
@@ -205,8 +214,11 @@ static void Step(graph<vertex> &GA, const std::vector<uintE> &frontier, F f) {
 }
 
 static std::vector<uintE> TakeOut(State &S) {
-  std::vector<uintE> v(S.out.begin(), S.out.begin() + S.out_n.load());
-  S.out_n = 0;
+  std::vector<uintE> v;
+  for (auto &o : S.out) {
+    v.insert(v.end(), o.begin(), o.end());
+    o.clear();
+  }
   return v;
 }
 
