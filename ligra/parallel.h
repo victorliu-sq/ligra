@@ -24,7 +24,27 @@
 #ifndef _PARALLEL_H
 #define _PARALLEL_H
 
-#if defined(CILK)
+#if defined(OPENCILK)
+// OpenCilk (clang -fopencilk): the maintained Cilk with a work-stealing
+// runtime. Cilk Plus's __cilkrts_set_param / __cilkrts_end_cilk do not exist;
+// the worker count comes from CILK_NWORKERS at start-up.
+#include <cilk/cilk.h>
+#include <cilk/cilk_api.h>
+#include <cstdlib>
+#include <iostream>
+#define parallel_main main
+#define parallel_for cilk_for
+#define parallel_for_1 _Pragma("cilk grainsize 1") cilk_for
+#define parallel_for_256 _Pragma("cilk grainsize 256") cilk_for
+static int getWorkers() { return __cilkrts_get_nworkers(); }
+static void setWorkers(int n) {
+  if (n != getWorkers()) {
+    std::cerr << "OpenCilk: set CILK_NWORKERS=" << n << " before starting; cannot change workers at run time" << std::endl;
+    std::abort();
+  }
+}
+
+#elif defined(CILK)
 #include <cilk/cilk.h>
 #define parallel_main main
 #define parallel_for cilk_for

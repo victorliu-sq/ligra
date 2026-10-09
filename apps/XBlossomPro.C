@@ -30,7 +30,9 @@
 //   ./XBlossomPro -s -rounds 11 -warmup 1 -dataset Amazon <adj file>
 #include "ligra.h"
 
-#if defined(OPENMP)
+#if defined(OPENCILK)
+static inline int WorkerId() { return __cilkrts_get_worker_number(); }
+#elif defined(OPENMP)
 #include <omp.h>
 // The outermost parallel region's thread number. edgeMap visits a high-degree
 // node's edges in a nested (inactive) region, where omp_get_thread_num() is 0
@@ -278,10 +280,15 @@ static void SearchPhase(graph<vertex> &GA, State &S) {
       if (!rescan.empty()) {
         std::sort(rescan.begin(), rescan.end());
         rescan.erase(std::unique(rescan.begin(), rescan.end()), rescan.end());
-        int workers = getWorkers();
-        setWorkers(1);
-        Step(GA, rescan, Augment_F(S));
-        setWorkers(workers);
+        // One worker, written out rather than via setWorkers(1), which only the
+        // OpenMP runtime can do at run time.
+        Augment_F f(S);
+        for (uintE v : rescan) {
+          for (uintE j = 0; j < GA.V[v].getOutDegree(); j++) {
+            uintE w = GA.V[v].getOutNeighbor(j);
+            if (f.cond(w)) f.updateAtomic(v, w);
+          }
+        }
       }
     }
     if (!S.paths.empty()) return;

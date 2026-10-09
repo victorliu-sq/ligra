@@ -50,6 +50,12 @@ all: $(ALL)
 % : %.C $(COMMON)
 	$(PCC) $(PCFLAGS) -o $@ $<
 
+# <app>_cilk: the app built with OpenCilk (clang -fopencilk, work-stealing
+# runtime) instead of OpenMP; OPENCILK_HOME is the install (deps/opencilk).
+OPENCILK_HOME ?= ../../../deps/opencilk
+%_cilk : %.C $(COMMON)
+	$(OPENCILK_HOME)/bin/clang++ -std=c++14 -fopencilk -march=native -O3 -DOPENCILK $(INTT) $(INTE) $(CODE) $(PD) $(MEM) -o $@ $<
+
 # XBlossomPro with dynamic OpenMP scheduling (load-balance experiment).
 XBlossomPro_dyn : XBlossomPro.C $(COMMON)
 	$(PCC) $(PCFLAGS) -DLIGRA_OMP_DYNAMIC -o $@ $<
