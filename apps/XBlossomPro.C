@@ -31,6 +31,17 @@
 // (built with OpenCilk: make XBlossomPro_cilk; without it the app runs serially)
 #include "ligra.h"
 
+// Compile-time switches (as X-Blossom's XB_REUSE / XB_COUNTERS):
+//   XBP_REUSE    1 = keep trees whose root is still exposed (XB-Pro-Ligra),
+//                0 = rebuild every tree each search phase (XB-Ligra)
+//   XBP_COUNTERS 1 = count reused / reset tree nodes per round (XBCounters lines)
+#ifndef XBP_REUSE
+#define XBP_REUSE 1
+#endif
+#ifndef XBP_COUNTERS
+#define XBP_COUNTERS 0
+#endif
+
 #if defined(OPENCILK)
 static inline int WorkerId() { return __cilkrts_get_worker_number(); }
 #else
@@ -64,6 +75,9 @@ struct State {
   // Nodes produced by expand / blossom, one buffer per worker (as XB-Pro's
   // thread-local vectors: one shared counter would make every emit contend).
   std::vector<std::vector<uintE>> out;
+
+  // Tree nodes reused / reset at the start of each search phase (XBP_COUNTERS).
+  std::atomic<unsigned long long> reused_tree_nodes{0}, reset_tree_nodes{0};
 
   explicit State(long n_) : n(n_), M(n_, -1), is_even(n_, 0), belongs(n_, -1), blossom_to_base(n_, -1),
                             path_table(n_), select_tree(n_), select_match(n_), select_blossom(n_),
@@ -237,16 +251,22 @@ static void SearchPhase(graph<vertex> &GA, State &S) {
     roots[x] = kept_even[x] = false;
     int root = S.belongs[x];
     if (S.M[x] == -1) {
+      // Case 1: exposed node, root of a new tree.
       S.is_even[x] = 1;
       S.belongs[x] = x;
       S.path_table[x].clear();
       roots[x] = true;
-    } else if (root == -1 || S.M[root] != -1) {
+      if (XBP_COUNTERS) S.reset_tree_nodes.fetch_add(1, std::memory_order_relaxed);
+    } else if (!XBP_REUSE || root == -1 || S.M[root] != -1) {
+      // Case 2: in no tree, or in a tree whose root got matched (or no reuse).
       S.is_even[x] = 0;
       S.belongs[x] = -1;
       S.path_table[x].clear();
-    } else if (S.is_even[x]) {
-      kept_even[x] = true;
+      if (XBP_COUNTERS) S.reset_tree_nodes.fetch_add(1, std::memory_order_relaxed);
+    } else {
+      // Case 3: in a tree whose root is still exposed: the tree is kept.
+      if (S.is_even[x]) kept_even[x] = true;
+      if (XBP_COUNTERS) S.reused_tree_nodes.fetch_add(1, std::memory_order_relaxed);
     }
   }
   _seq<uintE> r = sequence::packIndex<uintE>(roots, n);
@@ -362,9 +382,9 @@ void Compute(graph<vertex> &GA, commandLine P) {
   if (R.calls == 0) {
     long max_degree = 0;
     for (long v = 0; v < GA.n; v++) max_degree = std::max<long>(max_degree, GA.V[v].getOutDegree());
-    std::printf("XBConfig: arm=ligra variant=xb-pro-ligra reuse=1 lb=ligra-edgemap dataset=%s nodes=%ld "
+    std::printf("XBConfig: arm=ligra variant=%s reuse=%d counters=%d lb=ligra-edgemap dataset=%s nodes=%ld "
                 "edges=%ld max_degree=%ld warmup=%ld rounds=%ld threads=%d\n",
-                P.getOptionValue("-dataset", "unknown").c_str(), GA.n, GA.m / 2, max_degree, warmup,
+                XBP_REUSE ? "xb-pro-ligra" : "xb-ligra", XBP_REUSE, XBP_COUNTERS, P.getOptionValue("-dataset", "unknown").c_str(), GA.n, GA.m / 2, max_degree, warmup,
                 rounds - warmup, getWorkers());
   }
   const long call = R.calls++;
@@ -381,8 +401,12 @@ void Compute(graph<vertex> &GA, commandLine P) {
   if (R.first_size == -2) R.first_size = size;
   else if (size != R.first_size) R.all_same = false;
   R.total += secs;
-  std::printf("XBRound: index=%ld runtime_s=%.9f matching_size=%ld valid=%d\n", R.timed++, secs, size,
+  const long index = R.timed++;
+  std::printf("XBRound: index=%ld runtime_s=%.9f matching_size=%ld valid=%d\n", index, secs, size,
               valid ? 1 : 0);
+  if (XBP_COUNTERS)
+    std::printf("XBCounters: index=%ld reused_tree_nodes=%llu reset_tree_nodes=%llu\n", index,
+                S.reused_tree_nodes.load(), S.reset_tree_nodes.load());
   if (call == rounds - 1) {
     const char *status = !R.all_valid ? "invalid_matching" : (!R.all_same ? "matching_size_varies" : "ok");
     std::printf("XBResult: status=%s matching_size=%ld valid=%d rounds=%ld mean_runtime_s=%.9f\n", status,

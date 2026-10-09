@@ -49,8 +49,16 @@ all: $(ALL)
 # <app>_cilk: the app built with OpenCilk (clang -fopencilk, work-stealing
 # runtime), the build GACGE uses; OPENCILK_HOME is the install (deps/opencilk).
 OPENCILK_HOME ?= ../../../deps/opencilk
+CILKCXX = $(OPENCILK_HOME)/bin/clang++ -std=c++14 -fopencilk -march=native -O3 -DOPENCILK $(INTT) $(INTE) $(CODE) $(PD) $(MEM)
 %_cilk : %.C $(COMMON)
-	$(OPENCILK_HOME)/bin/clang++ -std=c++14 -fopencilk -march=native -O3 -DOPENCILK $(INTT) $(INTE) $(CODE) $(PD) $(MEM) -o $@ $<
+	$(CILKCXX) -o $@ $<
+
+# XBlossomPro variants for the reuse measurement: XB-Ligra (no tree reuse) and
+# XB-Pro-Ligra with reused / reset tree-node counters.
+XBlossomPro_noreuse_cilk : XBlossomPro.C $(COMMON)
+	$(CILKCXX) -DXBP_REUSE=0 -o $@ $<
+XBlossomPro_counters_cilk : XBlossomPro.C $(COMMON)
+	$(CILKCXX) -DXBP_COUNTERS=1 -o $@ $<
 
 $(COMMON):
 	ln -s ../ligra/$@ .
