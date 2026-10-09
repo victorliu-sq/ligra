@@ -191,18 +191,26 @@ struct Blossom_F {
     if (S.is_even[current] || !S.path_table[current].empty()) return;
     int expected = 0;
     if (!S.select_blossom[current].compare_exchange_strong(expected, 1)) return;
-    std::vector<int> &pt = S.path_table[current];
+    // Build the path locally and publish it in one step: other workers may walk
+    // this node's path as soon as it is even. A path with a repeated node comes
+    // from an inconsistent read of the tree under concurrency; then release the
+    // node so another blossom can still make it even in this phase (keeping the
+    // claim would leave it odd for the rest of the phase and can lose the last
+    // augmenting path).
+    std::vector<int> pt;
     if (anticlockwise) {
       for (size_t m = k + 1; m < blossom.size(); m++) pt.push_back(blossom[m]);
     } else {
       for (int m = k - 1; m >= 0; m--) pt.push_back(blossom[m]);
     }
     if (HasDuplicate(pt)) {
-      pt.clear();
+      S.select_blossom[current].store(0);
       return;
     }
-    S.emit(current);
+    S.path_table[current].swap(pt);
+    std::atomic_thread_fence(std::memory_order_release);
     S.is_even[current] = 1;
+    S.emit(current);
   }
 
   inline bool updateAtomic(uintE v, uintE w) {
