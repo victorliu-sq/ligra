@@ -32,7 +32,10 @@
 
 #if defined(OPENMP)
 #include <omp.h>
-static inline int WorkerId() { return omp_get_thread_num(); }
+// The outermost parallel region's thread number. edgeMap visits a high-degree
+// node's edges in a nested (inactive) region, where omp_get_thread_num() is 0
+// for every outer thread.
+static inline int WorkerId() { return omp_get_level() >= 1 ? omp_get_ancestor_thread_num(1) : 0; }
 #else
 static inline int WorkerId() { return 0; }
 #endif
