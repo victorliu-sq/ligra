@@ -291,6 +291,7 @@ static std::vector<int> PathToRoot(const State &S, int v) {
 
 // 1. Augmenting paths.
 struct Augment_F {
+  static constexpr const char *kPhase = "augment";
   State &S;
   explicit Augment_F(State &s) : S(s) {}
   inline bool cond(uintE w) { return S.is_even[w]; }
@@ -352,6 +353,7 @@ struct Augment_F {
 
 // 2. Expansion: w (in no tree) becomes odd, its mate x even.
 struct Expand_F {
+  static constexpr const char *kPhase = "expand";
   State &S;
   explicit Expand_F(State &s) : S(s) {}
   inline bool cond(uintE w) { return S.belongs[w] == -1; }
@@ -423,6 +425,7 @@ static bool HasDuplicate(const std::vector<int> &p) {
 }
 
 struct Blossom_F {
+  static constexpr const char *kPhase = "blossom";
   State &S;
   explicit Blossom_F(State &s) : S(s) {}
   inline bool cond(uintE w) { return S.is_even[w]; }
@@ -493,6 +496,7 @@ static void ParCopy(const uintE *src, size_t n, uintE *dst) {
 template <class vertex, class F>
 static void Step(graph<vertex> &GA, const std::vector<uintE> &frontier, F f) {
   if (frontier.empty()) return;
+  gacge_phase() = F::kPhase;
   uintE *idx = newA(uintE, frontier.size());
   if (XBP_OPT) ParCopy(frontier.data(), frontier.size(), idx);
   else std::copy(frontier.begin(), frontier.end(), idx);

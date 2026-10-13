@@ -244,7 +244,20 @@ inline bool gacge_stats() {
   static const bool on = std::getenv("GACGE_TRAVERSAL_STATS") != nullptr;
   return on;
 }
+// GACGE_TRAVERSAL_TRACE (with GACGE_TRAVERSAL_STATS): one XBStep line per
+// edgeMap call, the frontier's vertices and out-degree sum, its largest degree
+// and the mode (sparse: one task per frontier vertex, whose edges run serially
+// unless its degree exceeds 1000; dense: one task per graph vertex); an app
+// may name the call's phase through gacge_phase() (X-Blossom: augment, expand,
+// blossom).
+inline bool gacge_trace() {
+  static const bool on = gacge_stats() && std::getenv("GACGE_TRAVERSAL_TRACE") != nullptr;
+  return on;
+}
+inline const char*& gacge_phase() { static const char* p = "-"; return p; }
+inline int& gacge_run() { static int r = 0; return r; }
 inline void gacge_report(int run, long n, long m) {
+  gacge_run() = run + 1;
   if (!gacge_stats()) return;
   std::printf("XBTraversal: run=%d steps=%llu frontier_e=%llu nodes=%ld edges=%ld\n", run, gacge_steps().load(),
               gacge_frontier_e().load(), n, m);
@@ -298,6 +311,13 @@ vertexSubsetData<data> edgeMapData(graph<vertex>& GA, VS &vs, F f,
       }}
     outDegrees = sequence::plusReduce(degrees, m);
     if (gacge_stats()) { gacge_steps()++; gacge_frontier_e() += outDegrees; }
+    if (gacge_trace()) {
+      const uintT max_deg = sequence::reduce<uintT>(degrees, m, maxF<uintT>());
+      const bool dense = !(fl & no_dense) && m + outDegrees > threshold;
+      std::printf("XBStep: run=%d step=%llu phase=%s mode=%s frontier_v=%lu frontier_e=%lu max_deg=%lu\n", gacge_run(),
+                  gacge_steps().load() - 1, gacge_phase(), dense ? "dense" : "sparse", (unsigned long)m,
+                  (unsigned long)outDegrees, (unsigned long)max_deg);
+    }
     if (outDegrees == 0) return vertexSubsetData<data>(numVertices);
   }
   if (!(fl & no_dense) && m + outDegrees > threshold) {
