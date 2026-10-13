@@ -35,13 +35,16 @@
 //   XBP_REUSE    1 = keep trees whose root is still exposed (XB-Pro-Ligra),
 //                0 = rebuild every tree each search phase (XB-Ligra)
 //   XBP_COUNTERS 1 = count reused / reset tree nodes per round (XBCounters lines)
-//   XBP_OPT      1 = the same algorithm without XB-Pro's serial and contended
-//                parts (XB-Pro-Ligra-Opt): augmenting paths go to one flat buffer
-//                per worker instead of a mutex-guarded shared list, path and
-//                blossom walks reuse a per-worker scratch buffer instead of
-//                allocating, a blossom is collected front to back and reversed
-//                once instead of by repeated front inserts, and the per-node
-//                path table reservation and the frontier copies run in parallel
+//   XBP_OPT      1 = (default) no serial or contended parts beyond the
+//                algorithm's own: augmenting paths go to one flat buffer per
+//                worker, path and blossom walks reuse a per-worker scratch
+//                buffer, a blossom is collected front to back and reversed
+//                once, and the per-node path table reservation and the frontier
+//                copies run in parallel (1.6x faster at 48 workers, GM over the
+//                ten SNAP graphs, measure/xb-cpu-opt);
+//                0 = XB-Pro's own design (XBlossomPro_xbpro_cilk): a mutex
+//                around one shared path list, vectors allocated per path and
+//                per blossom edge, serial copies
 #ifndef XBP_REUSE
 #define XBP_REUSE 1
 #endif
@@ -49,7 +52,7 @@
 #define XBP_COUNTERS 0
 #endif
 #ifndef XBP_OPT
-#define XBP_OPT 0
+#define XBP_OPT 1
 #endif
 
 #if defined(OPENCILK)
@@ -522,7 +525,7 @@ void Compute(graph<vertex> &GA, commandLine P) {
     for (long v = 0; v < GA.n; v++) max_degree = std::max<long>(max_degree, GA.V[v].getOutDegree());
     std::printf("XBConfig: arm=ligra variant=%s reuse=%d counters=%d lb=ligra-edgemap dataset=%s nodes=%ld "
                 "edges=%ld max_degree=%ld warmup=%ld rounds=%ld threads=%d\n",
-                XBP_OPT ? "xb-pro-ligra-opt" : XBP_REUSE ? "xb-pro-ligra" : "xb-ligra", XBP_REUSE, XBP_COUNTERS, P.getOptionValue("-dataset", "unknown").c_str(), GA.n, GA.m / 2, max_degree, warmup,
+                !XBP_OPT ? "xb-pro-ligra-xbpro" : XBP_REUSE ? "xb-pro-ligra" : "xb-ligra", XBP_REUSE, XBP_COUNTERS, P.getOptionValue("-dataset", "unknown").c_str(), GA.n, GA.m / 2, max_degree, warmup,
                 rounds - warmup, getWorkers());
   }
   const long call = R.calls++;

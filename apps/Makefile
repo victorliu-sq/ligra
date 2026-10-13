@@ -59,10 +59,10 @@ XBlossomPro_noreuse_cilk : XBlossomPro.C $(COMMON)
 	$(CILKCXX) -DXBP_REUSE=0 -o $@ $<
 XBlossomPro_counters_cilk : XBlossomPro.C $(COMMON)
 	$(CILKCXX) -DXBP_COUNTERS=1 -o $@ $<
-# XB-Pro-Ligra-Opt: the same algorithm without XB-Pro's path mutex, per-edge
-# allocations and serial copies (XBP_OPT in XBlossomPro.C).
-XBlossomPro_opt_cilk : XBlossomPro.C $(COMMON)
-	$(CILKCXX) -DXBP_OPT=1 -o $@ $<
+# XB-Pro's own design (path mutex, per-edge allocations, serial copies) for
+# measure/xb-cpu-opt; XBlossomPro_cilk is the optimized default (XBP_OPT).
+XBlossomPro_xbpro_cilk : XBlossomPro.C $(COMMON)
+	$(CILKCXX) -DXBP_OPT=0 -o $@ $<
 
 $(COMMON):
 	ln -s ../ligra/$@ .

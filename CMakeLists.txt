@@ -41,13 +41,13 @@ add_ligra_cilk_app(ligra_xblossom_pro_cilk XBlossomPro)
 # Its reuse-measurement variants: XB-Ligra (no tree reuse), XB-Pro-Ligra with counters.
 add_ligra_cilk_app(ligra_xblossom_noreuse_cilk XBlossomPro_noreuse)
 add_ligra_cilk_app(ligra_xblossom_pro_counters_cilk XBlossomPro_counters)
-# XB-Pro-Ligra-Opt: the same algorithm without XB-Pro's path mutex, per-edge allocations and serial copies.
-add_ligra_cilk_app(ligra_xblossom_pro_opt_cilk XBlossomPro_opt)
+# XB-Pro's own design (path mutex, per-edge allocations, serial copies), for measure/xb-cpu-opt.
+add_ligra_cilk_app(ligra_xblossom_pro_xbpro_cilk XBlossomPro_xbpro)
 
 add_custom_target(ligra_cilk ALL
     DEPENDS ligra_bfs_cilk ligra_sssp_cilk ligra_multisssp_cilk
             ligra_bfs_throughput_cilk ligra_sssp_throughput_cilk ligra_multisssp_throughput_cilk
             ligra_xblossom_pro_cilk ligra_xblossom_noreuse_cilk ligra_xblossom_pro_counters_cilk
-            ligra_xblossom_pro_opt_cilk
+            ligra_xblossom_pro_xbpro_cilk
     COMMENT "Build the Ligra apps with OpenCilk: BFS, SSSP, MultiSSSP (+ _Throughput), XBlossomPro"
 )
