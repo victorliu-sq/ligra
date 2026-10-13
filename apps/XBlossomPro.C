@@ -56,18 +56,6 @@
 #ifndef XBP_OPT
 #define XBP_OPT 1
 #endif
-// XBP_SPAN 1 = (on top of XBP_OPT; XBlossomPro_span_cilk, not the default) also
-//              shorten what is serial inside a step: a blossom is checked for a
-//              repeated node once (sorted copy) instead of every node's new path
-//              being checked pair by pair (O(L^3) per blossom edge), the phase's
-//              initial frontiers and each worker's emitted nodes are copied in
-//              parallel, and frontier vectors skip the serial zero fill on resize
-#ifndef XBP_SPAN
-#define XBP_SPAN 0
-#endif
-#if XBP_SPAN && !XBP_OPT
-#error "XBP_SPAN builds on XBP_OPT"
-#endif
 
 #if defined(OPENCILK)
 static inline int WorkerId() { return __cilkrts_get_worker_number(); }
@@ -81,20 +69,17 @@ static inline int WorkerId() { return 0; }
 #include <cstdio>
 #include <mutex>
 #include <string>
-#include <memory>
-#include <type_traits>
-#include <utility>
 #include <vector>
 
 // Cilkscale (GACGE_CILKSCALE): the work and span of a part of one Compute(),
 // one CSV row tagged <name><call> (init, match, check) next to ligra.h's run<r>.
 #ifdef GACGE_CILKSCALE
 #define XBP_WS_BEGIN(v) wsp_t v = wsp_getworkspan()
-#define XBP_WS_END(v, name, call)                                     \
-  do {                                                                \
-    char t_[32];                                                      \
+#define XBP_WS_END(v, name, call)                                         \
+  do {                                                                    \
+    char t_[32];                                                          \
     std::snprintf(t_, sizeof t_, "%s%ld", name, static_cast<long>(call)); \
-    wsp_dump(wsp_sub(wsp_getworkspan(), v), t_);                      \
+    wsp_dump(wsp_sub(wsp_getworkspan(), v), t_);                          \
   } while (0)
 #else
 #define XBP_WS_BEGIN(v) (void)0
@@ -118,7 +103,6 @@ struct State {
   // path_nodes[t][path_start[t][i] .. path_start[t][i + 1] or the end); and a
   // per-worker scratch buffer for one root path or one blossom.
   std::vector<std::vector<int>> path_nodes, path_start, scratch;
-  std::vector<std::vector<int>> scratch2;  // XBP_SPAN: a blossom's sorted copy
   // Frontier nodes whose scan gave up a cross-tree edge under contention, per worker.
   std::vector<std::vector<uintE>> dropped;
 
@@ -134,8 +118,7 @@ struct State {
                             dropped(std::max(1, getWorkers())), out(std::max(1, getWorkers())),
                             path_nodes(XBP_OPT ? std::max(1, getWorkers()) : 0),
                             path_start(XBP_OPT ? std::max(1, getWorkers()) : 0),
-                            scratch(XBP_OPT ? std::max(1, getWorkers()) : 0),
-                            scratch2(XBP_SPAN ? std::max(1, getWorkers()) : 0) {
+                            scratch(XBP_OPT ? std::max(1, getWorkers()) : 0) {
     // as XB-Pro: limits reallocation under concurrent readers
     if (XBP_OPT) {
       parallel_for(long i = 0; i < n_; i++) path_table[i].reserve(100);
@@ -290,13 +273,6 @@ static void FindBlossom(const State &S, int v, int w, std::vector<int> &blossom)
   }
 }
 
-// XBP_SPAN: whether p repeats a node, from a sorted copy in tmp (O(L log L)).
-static bool HasDuplicateSorted(const std::vector<int> &p, std::vector<int> &tmp) {
-  tmp.assign(p.begin(), p.end());
-  std::sort(tmp.begin(), tmp.end());
-  return std::adjacent_find(tmp.begin(), tmp.end()) != tmp.end();
-}
-
 static bool HasDuplicate(const std::vector<int> &p) {
   for (size_t c = 0; c < p.size(); c++)
     for (size_t d = c + 1; d < p.size(); d++)
@@ -310,9 +286,7 @@ struct Blossom_F {
   inline bool cond(uintE w) { return S.is_even[w]; }
   inline bool update(uintE v, uintE w) { return updateAtomic(v, w); }
 
-  // check: test the node's new path for a repeated node (always, except under
-  // XBP_SPAN when the whole blossom has none: the path is a part of it).
-  inline void TryMakeEven(const std::vector<int> &blossom, int k, bool anticlockwise, bool check) {
+  inline void TryMakeEven(const std::vector<int> &blossom, int k, bool anticlockwise) {
     int current = blossom[k];
     if (S.blossom_to_base[current] == -1) S.blossom_to_base[current] = blossom[0];
     if (S.is_even[current] || !S.path_table[current].empty()) return;
@@ -330,7 +304,7 @@ struct Blossom_F {
     } else {
       for (int m = k - 1; m >= 0; m--) pt.push_back(blossom[m]);
     }
-    if (check && HasDuplicate(pt)) {
+    if (HasDuplicate(pt)) {
       S.select_blossom[current].store(0);
       return;
     }
@@ -346,30 +320,12 @@ struct Blossom_F {
     std::vector<int> &blossom = XBP_OPT ? S.scratch[WorkerId()] : local;
     FindBlossom(S, v, w, blossom);
     if (blossom.size() < 3) return false;
-    const bool check = !XBP_SPAN || HasDuplicateSorted(blossom, S.scratch2[WorkerId()]);
     S.blossom_to_base[blossom[0]] = blossom[0];
-    for (int k = static_cast<int>(blossom.size()) - 3; k >= 0; k -= 2) TryMakeEven(blossom, k, true, check);
-    for (int k = 2; k < static_cast<int>(blossom.size()) - 1; k += 2) TryMakeEven(blossom, k, false, check);
+    for (int k = static_cast<int>(blossom.size()) - 3; k >= 0; k -= 2) TryMakeEven(blossom, k, true);
+    for (int k = 2; k < static_cast<int>(blossom.size()) - 1; k += 2) TryMakeEven(blossom, k, false);
     return false;
   }
 };
-
-// XBP_SPAN: an allocator whose resize leaves new elements uninitialized (the
-// parallel copy that follows fills them), so frontier vectors skip a serial
-// zero fill per step.
-template <class T>
-struct NoInitAlloc : std::allocator<T> {
-  template <class U>
-  struct rebind { using other = NoInitAlloc<U>; };
-  NoInitAlloc() = default;
-  template <class U>
-  NoInitAlloc(const NoInitAlloc<U> &) {}
-  template <class U>
-  void construct(U *p) noexcept { ::new (static_cast<void *>(p)) U; }
-  template <class U, class... A>
-  void construct(U *p, A &&...a) { ::new (static_cast<void *>(p)) U(std::forward<A>(a)...); }
-};
-using Frontier = std::conditional<XBP_SPAN, std::vector<uintE, NoInitAlloc<uintE>>, std::vector<uintE>>::type;
 
 // src[0, n) to dst, in parallel blocks when it is large.
 static void ParCopy(const uintE *src, size_t n, uintE *dst) {
@@ -386,7 +342,7 @@ static void ParCopy(const uintE *src, size_t n, uintE *dst) {
 
 // One edgeMap over `frontier` with functor f; returns nothing (results are in S).
 template <class vertex, class F>
-static void Step(graph<vertex> &GA, const Frontier &frontier, F f) {
+static void Step(graph<vertex> &GA, const std::vector<uintE> &frontier, F f) {
   if (frontier.empty()) return;
   uintE *idx = newA(uintE, frontier.size());
   if (XBP_OPT) ParCopy(frontier.data(), frontier.size(), idx);
@@ -397,29 +353,23 @@ static void Step(graph<vertex> &GA, const Frontier &frontier, F f) {
 }
 
 // dst = a followed by b (XBP_OPT), reusing dst's storage.
-static void Concat(Frontier &dst, const Frontier &a, const Frontier &b) {
+static void Concat(std::vector<uintE> &dst, const std::vector<uintE> &a, const std::vector<uintE> &b) {
   dst.resize(a.size() + b.size());
   ParCopy(a.data(), a.size(), dst.data());
   ParCopy(b.data(), b.size(), dst.data() + a.size());
 }
 
 // The workers' emitted nodes into v (XBP_OPT): one parallel copy per worker.
-static void TakeOutInto(State &S, Frontier &v) {
+static void TakeOutInto(State &S, std::vector<uintE> &v) {
   const size_t W = S.out.size();
   std::vector<size_t> off(W + 1, 0);
   for (size_t t = 0; t < W; t++) off[t + 1] = off[t] + S.out[t].size();
   v.resize(off[W]);
   parallel_for(size_t t = 0; t < W; t++) {
-    if (XBP_SPAN) ParCopy(S.out[t].data(), S.out[t].size(), v.data() + off[t]);
-    else std::copy(S.out[t].begin(), S.out[t].end(), v.begin() + off[t]);
+    std::copy(S.out[t].begin(), S.out[t].end(), v.begin() + off[t]);
     S.out[t].clear();
   }
 }
-
-// v = TakeOut's result: a move when v is a plain vector, a copy otherwise.
-static void Assign(std::vector<uintE> &d, std::vector<uintE> &&s) { d = std::move(s); }
-template <class A>
-static void Assign(std::vector<uintE, A> &d, std::vector<uintE> &&s) { d.assign(s.begin(), s.end()); }
 
 static std::vector<uintE> TakeOut(State &S) {
   std::vector<uintE> v;
@@ -464,22 +414,13 @@ static void SearchPhase(graph<vertex> &GA, State &S) {
   }
   _seq<uintE> r = sequence::packIndex<uintE>(roots, n);
   _seq<uintE> k = sequence::packIndex<uintE>(kept_even, n);
-  Frontier v1, v2;
-  if (XBP_SPAN) {
-    v1.resize(r.n);
-    ParCopy(r.A, r.n, v1.data());
-    v2.resize(k.n);
-    ParCopy(k.A, k.n, v2.data());
-  } else {
-    v1.assign(r.A, r.A + r.n);
-    v2.assign(k.A, k.A + k.n);
-  }
+  std::vector<uintE> v1(r.A, r.A + r.n), v2(k.A, k.A + k.n);
   r.del();
   k.del();
   free(roots);
   free(kept_even);
 
-  Frontier frontier, blossom_frontier;
+  std::vector<uintE> frontier, blossom_frontier;
   if (XBP_OPT) {
     Concat(frontier, v1, v2);
   } else {
@@ -520,7 +461,7 @@ static void SearchPhase(graph<vertex> &GA, State &S) {
     // 2. Expand from every even node of the frontier: v1 = the new even nodes.
     Step(GA, frontier, Expand_F(S));
     if (XBP_OPT) TakeOutInto(S, v1);
-    else Assign(v1, TakeOut(S));
+    else v1 = TakeOut(S);
     // 3. Blossoms from the new even nodes and the previous blossom step's
     // (XB-Pro scans v1 + v2 here; v2 starts as the reused trees' even nodes).
     if (XBP_OPT) {
@@ -531,7 +472,7 @@ static void SearchPhase(graph<vertex> &GA, State &S) {
     }
     Step(GA, blossom_frontier, Blossom_F(S));
     if (XBP_OPT) TakeOutInto(S, v2);
-    else Assign(v2, TakeOut(S));
+    else v2 = TakeOut(S);
 
     if (XBP_OPT) {
       Concat(frontier, v1, v2);
@@ -618,8 +559,7 @@ void Compute(graph<vertex> &GA, commandLine P) {
     for (long v = 0; v < GA.n; v++) max_degree = std::max<long>(max_degree, GA.V[v].getOutDegree());
     std::printf("XBConfig: arm=ligra variant=%s reuse=%d counters=%d opt=%d lb=ligra-edgemap dataset=%s nodes=%ld "
                 "edges=%ld max_degree=%ld warmup=%ld rounds=%ld threads=%d\n",
-                !XBP_OPT ? "xb-pro-ligra-xbpro" : XBP_SPAN ? "xb-pro-ligra-span" : XBP_REUSE ? "xb-pro-ligra" : "xb-ligra",
-                XBP_REUSE, XBP_COUNTERS, XBP_OPT, P.getOptionValue("-dataset", "unknown").c_str(), GA.n, GA.m / 2, max_degree, warmup,
+                !XBP_OPT ? "xb-pro-ligra-xbpro" : XBP_REUSE ? "xb-pro-ligra" : "xb-ligra", XBP_REUSE, XBP_COUNTERS, XBP_OPT, P.getOptionValue("-dataset", "unknown").c_str(), GA.n, GA.m / 2, max_degree, warmup,
                 rounds - warmup, getWorkers());
   }
   const long call = R.calls++;

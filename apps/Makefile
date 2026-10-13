@@ -66,12 +66,6 @@ XBlossomPro_counters_cilk : XBlossomPro.C $(COMMON)
 # measure/xb-cpu-opt; XBlossomPro_cilk is the optimized default (XBP_OPT).
 XBlossomPro_xbpro_cilk : XBlossomPro.C $(COMMON)
 	$(CILKCXX) -DXBP_OPT=0 -o $@ $<
-# XB-Pro-Ligra with XBP_SPAN (shorter serial work inside a step), not the default:
-# measure/xb-cpu-opt and measure/cilkscale.
-XBlossomPro_span_cilk : XBlossomPro.C $(COMMON)
-	$(CILKCXX) -DXBP_SPAN=1 -o $@ $<
-XBlossomPro_span_cilkscale : XBlossomPro.C $(COMMON)
-	$(CILKCXX) -fcilktool=cilkscale -DGACGE_CILKSCALE -DXBP_SPAN=1 -o $@ $<
 
 $(COMMON):
 	ln -s ../ligra/$@ .
