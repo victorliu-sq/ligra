@@ -56,6 +56,27 @@
 #ifndef XBP_OPT
 #define XBP_OPT 1
 #endif
+// XBP_TRIPLET 1 = (on top of XBP_OPT; XBlossomPro_triplet_cilk, not the default)
+//              XB-Gunrock's compact path table and cycle-free blossom handling
+//              on the CPU: every node keeps one record of three node ids
+//              (12 B) instead of a vector of its path towards the root
+//              (XB-Pro reserves 100 ids per node):
+//                root or odd node                 (-1, -1, -1)
+//                x even by expand through v       (w, v, -1)    w = x's mate
+//                u even by a blossom with closing (s, o, base)
+//                edge (s, o) and base
+//              A blossom is never written out: its base is found by walking the
+//              records' anchors (v, or base), the odd nodes on both chains are
+//              claimed and become even after the step with record (s, o, base);
+//              an augmenting edge is kept as (v, w) and its paths are flipped by
+//              unfolding the records (as XB-Gunrock's TuplePathTable and
+//              ClaimOddNodesOnChain, src/gunrock/.../xblossom)
+#ifndef XBP_TRIPLET
+#define XBP_TRIPLET 0
+#endif
+#if XBP_TRIPLET && !XBP_OPT
+#error "XBP_TRIPLET builds on XBP_OPT"
+#endif
 
 #if defined(OPENCILK)
 static inline int WorkerId() { return __cilkrts_get_worker_number(); }
@@ -103,6 +124,11 @@ struct State {
   // path_nodes[t][path_start[t][i] .. path_start[t][i + 1] or the end); and a
   // per-worker scratch buffer for one root path or one blossom.
   std::vector<std::vector<int>> path_nodes, path_start, scratch;
+  // XBP_TRIPLET: the records, three node ids per node; per worker, the
+  // augmenting edges of this phase (v, w pairs) and the odd nodes claimed by
+  // this step's blossoms (u, s, o, base).
+  int *rec = nullptr;
+  std::vector<std::vector<int>> aug_pairs, tasks;
   // Frontier nodes whose scan gave up a cross-tree edge under contention, per worker.
   std::vector<std::vector<uintE>> dropped;
 
@@ -114,11 +140,18 @@ struct State {
   std::atomic<unsigned long long> reused_tree_nodes{0}, reset_tree_nodes{0};
 
   explicit State(long n_) : n(n_), M(n_, -1), is_even(n_, 0), belongs(n_, -1), blossom_to_base(n_, -1),
-                            path_table(n_), select_tree(n_), select_match(n_), select_blossom(n_),
+                            path_table(XBP_TRIPLET ? 0 : n_), select_tree(n_), select_match(n_), select_blossom(n_),
                             dropped(std::max(1, getWorkers())), out(std::max(1, getWorkers())),
                             path_nodes(XBP_OPT ? std::max(1, getWorkers()) : 0),
                             path_start(XBP_OPT ? std::max(1, getWorkers()) : 0),
-                            scratch(XBP_OPT ? std::max(1, getWorkers()) : 0) {
+                            scratch(XBP_OPT ? std::max(1, getWorkers()) : 0),
+                            aug_pairs(XBP_TRIPLET ? std::max(1, getWorkers()) : 0),
+                            tasks(XBP_TRIPLET ? std::max(1, getWorkers()) : 0) {
+    if (XBP_TRIPLET) {
+      rec = newA(int, 3 * n_);
+      parallel_for(long i = 0; i < 3 * n_; i++) rec[i] = -1;
+      return;
+    }
     // as XB-Pro: limits reallocation under concurrent readers
     if (XBP_OPT) {
       parallel_for(long i = 0; i < n_; i++) path_table[i].reserve(100);
@@ -127,7 +160,16 @@ struct State {
     }
   }
 
+  ~State() { free(rec); }
+  State(const State &) = delete;
+  State &operator=(const State &) = delete;
+
   bool have_paths() const {
+    if (XBP_TRIPLET) {
+      for (auto &p : aug_pairs)
+        if (!p.empty()) return true;
+      return false;
+    }
     if (!XBP_OPT) return !paths.empty();
     for (auto &p : path_start)
       if (!p.empty()) return true;
@@ -136,6 +178,93 @@ struct State {
 
   void emit(int v) { out[WorkerId()].push_back(v); }
 };
+
+// ---- XBP_TRIPLET: the records -----------------------------------------------
+static inline void SetRec(State &S, int x, int a, int b, int c) {
+  int *r = S.rec + 3 * static_cast<size_t>(x);
+  r[0] = a;
+  r[1] = b;
+  r[2] = c;
+}
+static inline bool RecEmpty(const State &S, int x) { return S.rec[3 * static_cast<size_t>(x)] == -1; }
+// the next even node towards the root: v of an expand record, base of a blossom record
+static inline int Anchor(const State &S, int x) {
+  const int *r = S.rec + 3 * static_cast<size_t>(x);
+  return r[2] == -1 ? r[1] : r[2];
+}
+
+// The base of the blossom closed by (v, w): the first anchor the two anchor
+// chains share (each walks to its root, then switches to the other side's
+// start). -1 if the chains never meet (a forest read mid-update).
+static int FindBaseByAnchor(const State &S, int v, int w) {
+  int cv = v, cw = w;
+  long it = 0;
+  while (cv != cw) {
+    cv = RecEmpty(S, cv) ? w : Anchor(S, cv);
+    cw = RecEmpty(S, cw) ? v : Anchor(S, cw);
+    if (++it > 2 * S.n + 2) return -1;
+  }
+  return cv;
+}
+
+// Claim every node on s's anchor chain down to base that was odd when it was
+// recorded (the w of each expand record) and is still odd: one task
+// (u, s, o, base) per claim, applied after the step.
+static void ClaimOddOnChain(State &S, int s, int o, int base) {
+  std::vector<int> &tk = S.tasks[WorkerId()];
+  int cur = s;
+  while (cur != base) {
+    const int *r = S.rec + 3 * static_cast<size_t>(cur);
+    if (r[0] == -1) return;  // the root without meeting the base
+    if (r[2] == -1) {
+      const int u = r[0];
+      int e = 0;
+      if (!S.is_even[u] && S.select_blossom[u].compare_exchange_strong(e, 1)) {
+        tk.push_back(u);
+        tk.push_back(s);
+        tk.push_back(o);
+        tk.push_back(base);
+      }
+    }
+    cur = r[2] == -1 ? r[1] : r[2];
+  }
+}
+
+// Flip the matched pairs of route(x) up to its root. A blossom record
+// (s, o, base) met at u stands for (s, o), route(s) before u, and route(o),
+// which reaches base and goes on as the rest of this walk: route(s) is
+// walked first, route(o) kept on a stack (one entry per nesting level).
+static void FlipRoute(State &S, int x) {
+  struct Walk {
+    int x, stop;  // stop >= 0: end at the expand record whose w is stop (an odd node); -1: the root
+  };
+  Walk stack[256];
+  int depth = 0;
+  Walk cur{x, -1};
+  while (true) {
+    while (true) {
+      const int *r = S.rec + 3 * static_cast<size_t>(cur.x);
+      if (r[0] == -1) break;  // the root
+      if (r[2] == -1) {
+        if (cur.stop >= 0 && r[0] == cur.stop) break;
+        S.M[r[0]] = r[1];
+        S.M[r[1]] = r[0];
+        cur.x = r[1];
+      } else {
+        if (depth == 256) {
+          std::fprintf(stderr, "XBError: blossom nesting deeper than 256 while flipping a path\n");
+          std::abort();
+        }
+        stack[depth++] = Walk{r[1], cur.stop};
+        S.M[r[0]] = r[1];
+        S.M[r[1]] = r[0];
+        cur = Walk{r[0], cur.x};
+      }
+    }
+    if (depth == 0) break;
+    cur = stack[--depth];
+  }
+}
 
 // v, then the nodes of its path table entries up to its tree's root, appended to out.
 static void AppendPathToRoot(const State &S, int v, std::vector<int> &out) {
@@ -192,6 +321,12 @@ struct Augment_F {
         return false;
       }
     }
+    if (XBP_TRIPLET) {
+      std::vector<int> &ap = S.aug_pairs[WorkerId()];
+      ap.push_back(v);
+      ap.push_back(w);
+      return false;
+    }
     if (XBP_OPT) {
       // root(v) .. v, w .. root(w), written straight into this worker's buffer
       const int t = WorkerId();
@@ -222,8 +357,12 @@ struct Expand_F {
     int x = S.M[w];
     int expected = 0;
     if (!S.select_match[std::min<int>(w, x)].compare_exchange_strong(expected, 1)) return false;
-    S.path_table[x].push_back(w);
-    S.path_table[x].push_back(v);
+    if (XBP_TRIPLET) {
+      SetRec(S, x, w, v, -1);
+    } else {
+      S.path_table[x].push_back(w);
+      S.path_table[x].push_back(v);
+    }
     S.is_even[w] = 0;
     S.is_even[x] = 1;
     S.belongs[w] = S.belongs[v];
@@ -316,6 +455,13 @@ struct Blossom_F {
 
   inline bool updateAtomic(uintE v, uintE w) {
     if (S.belongs[w] != S.belongs[v] || static_cast<int>(w) == S.M[v] || S.belongs[w] == -1) return false;
+    if (XBP_TRIPLET) {
+      const int base = FindBaseByAnchor(S, v, w);
+      if (base < 0) return false;
+      ClaimOddOnChain(S, v, w, base);
+      ClaimOddOnChain(S, w, v, base);
+      return false;
+    }
     std::vector<int> local;
     std::vector<int> &blossom = XBP_OPT ? S.scratch[WorkerId()] : local;
     FindBlossom(S, v, w, blossom);
@@ -397,14 +543,16 @@ static void SearchPhase(graph<vertex> &GA, State &S) {
       // Case 1: exposed node, root of a new tree.
       S.is_even[x] = 1;
       S.belongs[x] = x;
-      S.path_table[x].clear();
+      if (XBP_TRIPLET) SetRec(S, x, -1, -1, -1);
+      else S.path_table[x].clear();
       roots[x] = true;
       if (XBP_COUNTERS) S.reset_tree_nodes.fetch_add(1, std::memory_order_relaxed);
     } else if (!XBP_REUSE || root == -1 || S.M[root] != -1) {
       // Case 2: in no tree, or in a tree whose root got matched (or no reuse).
       S.is_even[x] = 0;
       S.belongs[x] = -1;
-      S.path_table[x].clear();
+      if (XBP_TRIPLET) SetRec(S, x, -1, -1, -1);
+      else S.path_table[x].clear();
       if (XBP_COUNTERS) S.reset_tree_nodes.fetch_add(1, std::memory_order_relaxed);
     } else {
       // Case 3: in a tree whose root is still exposed: the tree is kept.
@@ -471,6 +619,19 @@ static void SearchPhase(graph<vertex> &GA, State &S) {
       blossom_frontier.insert(blossom_frontier.end(), v2.begin(), v2.end());
     }
     Step(GA, blossom_frontier, Blossom_F(S));
+    if (XBP_TRIPLET) {
+      // the claimed odd nodes become even around their blossoms
+      parallel_for(size_t t = 0; t < S.tasks.size(); t++) {
+        const std::vector<int> &tk = S.tasks[t];
+        parallel_for(size_t i = 0; i < tk.size() / 4; i++) {
+          const int u = tk[4 * i];
+          SetRec(S, u, tk[4 * i + 1], tk[4 * i + 2], tk[4 * i + 3]);
+          S.is_even[u] = 1;
+          S.emit(u);
+        }
+      }
+      for (auto &tk : S.tasks) tk.clear();
+    }
     if (XBP_OPT) TakeOutInto(S, v2);
     else v2 = TakeOut(S);
 
@@ -489,6 +650,21 @@ static void MaximumMatching(graph<vertex> &GA, State &S) {
   while (true) {
     SearchPhase(GA, S);
     if (!S.have_paths()) return;
+    if (XBP_TRIPLET) {
+      // each augmenting edge (v, w) owns its two trees: the flips do not overlap
+      parallel_for(size_t t = 0; t < S.aug_pairs.size(); t++) {
+        const std::vector<int> &ap = S.aug_pairs[t];
+        parallel_for(size_t i = 0; i < ap.size() / 2; i++) {
+          const int v = ap[2 * i], w = ap[2 * i + 1];
+          S.M[v] = w;
+          S.M[w] = v;
+          FlipRoute(S, v);
+          FlipRoute(S, w);
+        }
+      }
+      for (auto &ap : S.aug_pairs) ap.clear();
+      continue;
+    }
     if (XBP_OPT) {
       parallel_for(size_t t = 0; t < S.path_start.size(); t++) {
         const std::vector<int> &pn = S.path_nodes[t], &ps = S.path_start[t];
@@ -559,7 +735,7 @@ void Compute(graph<vertex> &GA, commandLine P) {
     for (long v = 0; v < GA.n; v++) max_degree = std::max<long>(max_degree, GA.V[v].getOutDegree());
     std::printf("XBConfig: arm=ligra variant=%s reuse=%d counters=%d opt=%d lb=ligra-edgemap dataset=%s nodes=%ld "
                 "edges=%ld max_degree=%ld warmup=%ld rounds=%ld threads=%d\n",
-                !XBP_OPT ? "xb-pro-ligra-xbpro" : XBP_REUSE ? "xb-pro-ligra" : "xb-ligra", XBP_REUSE, XBP_COUNTERS, XBP_OPT, P.getOptionValue("-dataset", "unknown").c_str(), GA.n, GA.m / 2, max_degree, warmup,
+                !XBP_OPT ? "xb-pro-ligra-xbpro" : XBP_TRIPLET ? "xb-pro-ligra-triplet" : XBP_REUSE ? "xb-pro-ligra" : "xb-ligra", XBP_REUSE, XBP_COUNTERS, XBP_OPT, P.getOptionValue("-dataset", "unknown").c_str(), GA.n, GA.m / 2, max_degree, warmup,
                 rounds - warmup, getWorkers());
   }
   const long call = R.calls++;

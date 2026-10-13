@@ -55,6 +55,8 @@ add_ligra_cilk_app(ligra_xblossom_noreuse_cilk XBlossomPro_noreuse)
 add_ligra_cilk_app(ligra_xblossom_pro_counters_cilk XBlossomPro_counters)
 # XB-Pro's own design (path mutex, per-edge allocations, serial copies), for measure/xb-cpu-opt.
 add_ligra_cilk_app(ligra_xblossom_pro_xbpro_cilk XBlossomPro_xbpro)
+# XB-Gunrock's triplet path table and cycle-free blossoms on the CPU (XBP_TRIPLET), not the default.
+add_ligra_cilk_app(ligra_xblossom_pro_triplet_cilk XBlossomPro_triplet)
 
 add_ligra_cilkscale_app(ligra_bfs_cilkscale BFS)
 add_ligra_cilkscale_app(ligra_sssp_cilkscale SSSP)
@@ -65,7 +67,7 @@ add_custom_target(ligra_cilk ALL
     DEPENDS ligra_bfs_cilk ligra_sssp_cilk ligra_multisssp_cilk
             ligra_bfs_throughput_cilk ligra_sssp_throughput_cilk ligra_multisssp_throughput_cilk
             ligra_xblossom_pro_cilk ligra_xblossom_noreuse_cilk ligra_xblossom_pro_counters_cilk
-            ligra_xblossom_pro_xbpro_cilk
+            ligra_xblossom_pro_xbpro_cilk ligra_xblossom_pro_triplet_cilk
             ligra_bfs_cilkscale ligra_sssp_cilkscale ligra_multisssp_cilkscale ligra_xblossom_pro_cilkscale
     COMMENT "Build the Ligra apps with OpenCilk: BFS, SSSP, MultiSSSP (+ _Throughput), XBlossomPro"
 )

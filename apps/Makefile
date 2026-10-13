@@ -66,6 +66,10 @@ XBlossomPro_counters_cilk : XBlossomPro.C $(COMMON)
 # measure/xb-cpu-opt; XBlossomPro_cilk is the optimized default (XBP_OPT).
 XBlossomPro_xbpro_cilk : XBlossomPro.C $(COMMON)
 	$(CILKCXX) -DXBP_OPT=0 -o $@ $<
+# XB-Ligra with XB-Gunrock's compact (triplet) path table and cycle-free
+# blossom handling (XBP_TRIPLET), not the default: measure/xb-ligra-triplet.
+XBlossomPro_triplet_cilk : XBlossomPro.C $(COMMON)
+	$(CILKCXX) -DXBP_TRIPLET=1 -o $@ $<
 
 $(COMMON):
 	ln -s ../ligra/$@ .
