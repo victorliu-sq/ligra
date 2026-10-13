@@ -129,6 +129,25 @@ static vertexSubset make_initial_frontier(commandLine& P, weightT* Dist, long n)
   long source_count = 0;
 
   char* source_count_spec = P.getOptionValue("--src-count");
+  // --src-file <path>: the fixed source set, one vertex per line ('#' comments)
+  char* source_file = P.getOptionValue("--src-file");
+  if (source_file != NULL) {
+    std::ifstream in(source_file);
+    if (!in) {
+      std::cerr << "Could not open --src-file " << source_file << std::endl;
+      abort();
+    }
+    string line;
+    while (std::getline(in, line)) {
+      if (line.empty() || line[0] == '#') continue;
+      parse_source_text(line, "--src-file", sources, Dist, n, &source_count);
+    }
+    if (source_count_spec != NULL) {
+      std::cerr << "Use either --src-file or --src-count, not both" << std::endl;
+      abort();
+    }
+    return vertexSubset(n, source_count, sources);
+  }
   bool explicit_sources = false;
   for (int i = 1; i < P.argc - 1; i++) {
     string arg = P.argv[i];
