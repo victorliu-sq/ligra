@@ -29,6 +29,8 @@
 #include <cstring>
 #include <string>
 #include <algorithm>
+#include <atomic>
+#include <cstdio>
 #include "parallel.h"
 #include "gettime.h"
 #include "utils.h"
@@ -232,6 +234,25 @@ vertexSubsetData<data> edgeMapSparse_no_filter(graph<vertex>& GA,
 }
 
 // Decides on sparse or dense base on number of nonzeros in the active vertices.
+// GACGE traversal statistics (GACGE_TRAVERSAL_STATS set): the edgeMap calls of
+// one Compute() and the out-degree sum of their frontiers (the edges a push
+// traversal examines, the same count as Gunrock's frontier edges), printed as an
+// XBTraversal line after every Compute(); off otherwise.
+inline std::atomic<unsigned long long>& gacge_steps() { static std::atomic<unsigned long long> v{0}; return v; }
+inline std::atomic<unsigned long long>& gacge_frontier_e() { static std::atomic<unsigned long long> v{0}; return v; }
+inline bool gacge_stats() {
+  static const bool on = std::getenv("GACGE_TRAVERSAL_STATS") != nullptr;
+  return on;
+}
+inline void gacge_report(int run, long n, long m) {
+  if (!gacge_stats()) return;
+  std::printf("XBTraversal: run=%d steps=%llu frontier_e=%llu nodes=%ld edges=%ld\n", run, gacge_steps().load(),
+              gacge_frontier_e().load(), n, m);
+  std::fflush(stdout);
+  gacge_steps() = 0;
+  gacge_frontier_e() = 0;
+}
+
 template <class data, class vertex, class VS, class F>
 vertexSubsetData<data> edgeMapData(graph<vertex>& GA, VS &vs, F f,
     intT threshold = -1, const flags& fl=0) {
@@ -257,6 +278,7 @@ vertexSubsetData<data> edgeMapData(graph<vertex>& GA, VS &vs, F f,
 	frontierVertices[i] = v;
       }}
     outDegrees = sequence::plusReduce(degrees, m);
+    if (gacge_stats()) { gacge_steps()++; gacge_frontier_e() += outDegrees; }
     if (outDegrees == 0) return vertexSubsetData<data>(numVertices);
   }
   if (!(fl & no_dense) && m + outDegrees > threshold) {
@@ -513,6 +535,7 @@ int parallel_main(int argc, char* argv[]) {
         startTime();
         Compute(G,P);
         nextTime("Running time");
+        gacge_report(r, G.n, G.m);
       }
       G.del();
     } else {
@@ -529,6 +552,7 @@ int parallel_main(int argc, char* argv[]) {
         startTime();
         Compute(G,P);
         nextTime("Running time");
+        gacge_report(r, G.n, G.m);
         if(G.transposed) G.transpose();
       }
       G.del();
@@ -552,6 +576,7 @@ int parallel_main(int argc, char* argv[]) {
         Compute(G,P);
 
         nextTime("Running time");
+        gacge_report(r, G.n, G.m);
       }
       G.del();
     } else {
@@ -569,6 +594,7 @@ int parallel_main(int argc, char* argv[]) {
         startTime();
         Compute(G,P);
         nextTime("Running time");
+        gacge_report(r, G.n, G.m);
         if(G.transposed) G.transpose();
       }
       G.del();
