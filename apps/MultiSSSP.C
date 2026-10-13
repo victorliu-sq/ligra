@@ -3,6 +3,7 @@
 #define WEIGHTED 1
 #include "ligra.h"
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <limits>
@@ -158,6 +159,9 @@ static vertexSubset make_initial_frontier(commandLine& P, weightT* Dist, long n)
       for (long v = 0; v < n; v++)
         if (sources[v]) cached.push_back(v);
       loaded = true;
+      // the measurement scripts check for this line (analysis/common/units.py)
+      std::printf("XBSources: file_once=1 count=%ld\n", source_count);
+      std::fflush(stdout);
       return vertexSubset(n, source_count, sources);
     }
     const long k = cached.size();
