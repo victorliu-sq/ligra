@@ -36,7 +36,9 @@
 //                0 = rebuild every tree each search phase (XB-Ligra)
 //   XBP_COUNTERS 1 = count reused / reset tree nodes per round (XBCounters lines)
 //   XBP_OPT      1 = (default) no serial or contended parts beyond the
-//                algorithm's own: augmenting paths go to one flat buffer per
+//                algorithm's own: the two trees of an augmenting path are
+//                claimed in id order (no mutual back-off, so no serial rescan
+//                of the edges given up), augmenting paths go to one flat buffer per
 //                worker, path and blossom walks reuse a per-worker scratch
 //                buffer, a blossom is collected front to back and reversed
 //                once, and the per-node path table reservation and the frontier
@@ -149,16 +151,31 @@ struct Augment_F {
   inline bool updateAtomic(uintE v, uintE w) {
     int tv = S.belongs[v], tw = S.belongs[w];
     if (tv == tw || tv == -1 || tw == -1) return false;
-    int expected = 0;
-    if (!S.select_tree[tv].compare_exchange_strong(expected, 1)) {
-      S.dropped[WorkerId()].push_back(v);
-      return false;
-    }
-    if (!S.select_tree[tw].compare_exchange_strong(expected, 1)) {
-      int taken = 1;
-      S.select_tree[tv].compare_exchange_strong(taken, 0);
-      S.dropped[WorkerId()].push_back(v);
-      return false;
+    if (XBP_OPT) {
+      // Claim the two trees in id order. A failed claim means another worker
+      // holds that tree; following who holds what only climbs in tree id, so
+      // whenever a pass has cross-tree edges some worker gets both trees and
+      // records a path: no pass ends empty because of mutual back-off, and the
+      // serial rescan below is not needed.
+      const int lo = std::min(tv, tw), hi = std::max(tv, tw);
+      int e1 = 0, e2 = 0;
+      if (!S.select_tree[lo].compare_exchange_strong(e1, 1)) return false;
+      if (!S.select_tree[hi].compare_exchange_strong(e2, 1)) {
+        S.select_tree[lo].store(0);
+        return false;
+      }
+    } else {
+      int expected = 0;
+      if (!S.select_tree[tv].compare_exchange_strong(expected, 1)) {
+        S.dropped[WorkerId()].push_back(v);
+        return false;
+      }
+      if (!S.select_tree[tw].compare_exchange_strong(expected, 1)) {
+        int taken = 1;
+        S.select_tree[tv].compare_exchange_strong(taken, 0);
+        S.dropped[WorkerId()].push_back(v);
+        return false;
+      }
     }
     if (XBP_OPT) {
       // root(v) .. v, w .. root(w), written straight into this worker's buffer
@@ -400,9 +417,11 @@ static void SearchPhase(graph<vertex> &GA, State &S) {
     // tree, fail on the other and both back off, so neither records the path.
     // If the pass found nothing, every claim was released: rescanning the nodes
     // that gave up an edge on one worker (which cannot contend) settles it.
+    // (XBP_OPT claims trees in id order instead, so a pass with cross-tree
+    // edges always records a path and there is no rescan.)
     for (auto &d : S.dropped) d.clear();
     Step(GA, frontier, Augment_F(S));
-    if (!S.have_paths()) {
+    if (!XBP_OPT && !S.have_paths()) {
       std::vector<uintE> rescan;
       for (auto &d : S.dropped) {
         rescan.insert(rescan.end(), d.begin(), d.end());

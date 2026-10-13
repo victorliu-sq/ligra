@@ -253,6 +253,25 @@ inline void gacge_report(int run, long n, long m) {
   gacge_frontier_e() = 0;
 }
 
+// Cilkscale (built with -fcilktool=cilkscale -DGACGE_CILKSCALE, <App>_cilkscale):
+// the work and span of each Compute(), one CSV row per run tagged run<r>
+// (tag,work,span,parallelism,burdened_span,burdened_parallelism), printed with
+// the whole program's row when the program ends.
+#ifdef GACGE_CILKSCALE
+#include <cilk/cilkscale.h>
+inline wsp_t &gacge_ws0() { static wsp_t w; return w; }
+inline void gacge_ws_begin() { gacge_ws0() = wsp_getworkspan(); }
+inline void gacge_ws_end(int run) {
+  wsp_t d = wsp_sub(wsp_getworkspan(), gacge_ws0());
+  char tag[32];
+  std::snprintf(tag, sizeof tag, "run%d", run);
+  wsp_dump(d, tag);
+}
+#else
+inline void gacge_ws_begin() {}
+inline void gacge_ws_end(int) {}
+#endif
+
 template <class data, class vertex, class VS, class F>
 vertexSubsetData<data> edgeMapData(graph<vertex>& GA, VS &vs, F f,
     intT threshold = -1, const flags& fl=0) {
@@ -533,7 +552,9 @@ int parallel_main(int argc, char* argv[]) {
 
       for(int r=0;r<rounds;r++) {
         startTime();
+        gacge_ws_begin();
         Compute(G,P);
+        gacge_ws_end(r);
         nextTime("Running time");
         gacge_report(r, G.n, G.m);
       }
@@ -550,7 +571,9 @@ int parallel_main(int argc, char* argv[]) {
       if(G.transposed) G.transpose();
       for(int r=0;r<rounds;r++) {
         startTime();
+        gacge_ws_begin();
         Compute(G,P);
+        gacge_ws_end(r);
         nextTime("Running time");
         gacge_report(r, G.n, G.m);
         if(G.transposed) G.transpose();
@@ -573,7 +596,9 @@ int parallel_main(int argc, char* argv[]) {
       // Compute(G,P);
       for(int r=0;r<rounds;r++) {
         startTime();
+        gacge_ws_begin();
         Compute(G,P);
+        gacge_ws_end(r);
 
         nextTime("Running time");
         gacge_report(r, G.n, G.m);
@@ -592,7 +617,9 @@ int parallel_main(int argc, char* argv[]) {
       if(G.transposed) G.transpose();
       for(int r=0;r<rounds;r++) {
         startTime();
+        gacge_ws_begin();
         Compute(G,P);
+        gacge_ws_end(r);
         nextTime("Running time");
         gacge_report(r, G.n, G.m);
         if(G.transposed) G.transpose();

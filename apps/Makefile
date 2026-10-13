@@ -52,6 +52,9 @@ OPENCILK_HOME ?= ../../../deps/opencilk
 CILKCXX = $(OPENCILK_HOME)/bin/clang++ -std=c++14 -fopencilk -march=native -O3 -DOPENCILK $(INTT) $(INTE) $(CODE) $(PD) $(MEM)
 %_cilk : %.C $(COMMON)
 	$(CILKCXX) -o $@ $<
+# <app>_cilkscale: Cilkscale build, the work and span of every Compute() (ligra.h)
+%_cilkscale : %.C $(COMMON)
+	$(CILKCXX) -fcilktool=cilkscale -DGACGE_CILKSCALE -o $@ $<
 
 # XBlossomPro variants for the reuse measurement: XB-Ligra (no tree reuse) and
 # XB-Pro-Ligra with reused / reset tree-node counters.

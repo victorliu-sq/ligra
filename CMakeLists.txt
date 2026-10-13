@@ -30,6 +30,18 @@ function(add_ligra_cilk_app TARGET_NAME APP_NAME)
     )
 endfunction()
 
+# <App>_cilkscale: the same app with Cilkscale, the work and span of each Compute().
+function(add_ligra_cilkscale_app TARGET_NAME APP_NAME)
+    add_custom_target(${TARGET_NAME}
+        COMMAND "${MAKE_EXECUTABLE}" -C "${LIGRA_APPS_DIR}" "${APP_NAME}_cilkscale" "OPENCILK_HOME=${LIGRA_OPENCILK_HOME}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${LIGRA_APPS_DIR}/${APP_NAME}_cilkscale"
+                "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${APP_NAME}_cilkscale"
+        COMMENT "Build Ligra ${APP_NAME} with OpenCilk and Cilkscale"
+    )
+endfunction()
+
 add_ligra_cilk_app(ligra_bfs_cilk BFS)
 add_ligra_cilk_app(ligra_sssp_cilk SSSP)
 add_ligra_cilk_app(ligra_multisssp_cilk MultiSSSP)
@@ -44,10 +56,16 @@ add_ligra_cilk_app(ligra_xblossom_pro_counters_cilk XBlossomPro_counters)
 # XB-Pro's own design (path mutex, per-edge allocations, serial copies), for measure/xb-cpu-opt.
 add_ligra_cilk_app(ligra_xblossom_pro_xbpro_cilk XBlossomPro_xbpro)
 
+add_ligra_cilkscale_app(ligra_bfs_cilkscale BFS)
+add_ligra_cilkscale_app(ligra_sssp_cilkscale SSSP)
+add_ligra_cilkscale_app(ligra_multisssp_cilkscale MultiSSSP)
+add_ligra_cilkscale_app(ligra_xblossom_pro_cilkscale XBlossomPro)
+
 add_custom_target(ligra_cilk ALL
     DEPENDS ligra_bfs_cilk ligra_sssp_cilk ligra_multisssp_cilk
             ligra_bfs_throughput_cilk ligra_sssp_throughput_cilk ligra_multisssp_throughput_cilk
             ligra_xblossom_pro_cilk ligra_xblossom_noreuse_cilk ligra_xblossom_pro_counters_cilk
             ligra_xblossom_pro_xbpro_cilk
+            ligra_bfs_cilkscale ligra_sssp_cilkscale ligra_multisssp_cilkscale ligra_xblossom_pro_cilkscale
     COMMENT "Build the Ligra apps with OpenCilk: BFS, SSSP, MultiSSSP (+ _Throughput), XBlossomPro"
 )
