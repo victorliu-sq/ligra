@@ -523,9 +523,9 @@ void Compute(graph<vertex> &GA, commandLine P) {
   if (R.calls == 0) {
     long max_degree = 0;
     for (long v = 0; v < GA.n; v++) max_degree = std::max<long>(max_degree, GA.V[v].getOutDegree());
-    std::printf("XBConfig: arm=ligra variant=%s reuse=%d counters=%d lb=ligra-edgemap dataset=%s nodes=%ld "
+    std::printf("XBConfig: arm=ligra variant=%s reuse=%d counters=%d opt=%d lb=ligra-edgemap dataset=%s nodes=%ld "
                 "edges=%ld max_degree=%ld warmup=%ld rounds=%ld threads=%d\n",
-                !XBP_OPT ? "xb-pro-ligra-xbpro" : XBP_REUSE ? "xb-pro-ligra" : "xb-ligra", XBP_REUSE, XBP_COUNTERS, P.getOptionValue("-dataset", "unknown").c_str(), GA.n, GA.m / 2, max_degree, warmup,
+                !XBP_OPT ? "xb-pro-ligra-xbpro" : XBP_REUSE ? "xb-pro-ligra" : "xb-ligra", XBP_REUSE, XBP_COUNTERS, XBP_OPT, P.getOptionValue("-dataset", "unknown").c_str(), GA.n, GA.m / 2, max_degree, warmup,
                 rounds - warmup, getWorkers());
   }
   const long call = R.calls++;
