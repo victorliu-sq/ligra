@@ -56,8 +56,8 @@
 #ifndef XBP_OPT
 #define XBP_OPT 1
 #endif
-// XBP_TRIPLET 1 = (on top of XBP_OPT; XBlossomPro_triplet_cilk, not the default)
-//              XB-Gunrock's compact path table and cycle-free blossom handling
+// XBP_TRIPLET 1 = (default with XBP_OPT, since 2026-10-13) XB-Gunrock's
+//              compact path table and cycle-free blossom handling
 //              on the CPU: every node keeps one record of three node ids
 //              (12 B) instead of a vector of its path towards the root
 //              (XB-Pro reserves 100 ids per node):
@@ -71,8 +71,11 @@
 //              an augmenting edge is kept as (v, w) and its paths are flipped by
 //              unfolding the records (as XB-Gunrock's TuplePathTable and
 //              ClaimOddNodesOnChain, src/gunrock/.../xblossom)
+//              0 = a vector of path nodes per node, 100 reserved, and blossoms
+//              written out (XB-Pro's path table; XBlossomPro_vector_cilk, and
+//              the XB-Pro design build)
 #ifndef XBP_TRIPLET
-#define XBP_TRIPLET 0
+#define XBP_TRIPLET XBP_OPT
 #endif
 #if XBP_TRIPLET && !XBP_OPT
 #error "XBP_TRIPLET builds on XBP_OPT"
@@ -733,9 +736,10 @@ void Compute(graph<vertex> &GA, commandLine P) {
   if (R.calls == 0) {
     long max_degree = 0;
     for (long v = 0; v < GA.n; v++) max_degree = std::max<long>(max_degree, GA.V[v].getOutDegree());
-    std::printf("XBConfig: arm=ligra variant=%s reuse=%d counters=%d opt=%d lb=ligra-edgemap dataset=%s nodes=%ld "
+    std::printf("XBConfig: arm=ligra variant=%s reuse=%d counters=%d opt=%d triplet=%d lb=ligra-edgemap dataset=%s nodes=%ld "
                 "edges=%ld max_degree=%ld warmup=%ld rounds=%ld threads=%d\n",
-                !XBP_OPT ? "xb-pro-ligra-xbpro" : XBP_TRIPLET ? "xb-pro-ligra-triplet" : XBP_REUSE ? "xb-pro-ligra" : "xb-ligra", XBP_REUSE, XBP_COUNTERS, XBP_OPT, P.getOptionValue("-dataset", "unknown").c_str(), GA.n, GA.m / 2, max_degree, warmup,
+                !XBP_OPT ? "xb-pro-ligra-xbpro" : !XBP_TRIPLET ? "xb-pro-ligra-vector" : XBP_REUSE ? "xb-pro-ligra" : "xb-ligra",
+                XBP_REUSE, XBP_COUNTERS, XBP_OPT, XBP_TRIPLET, P.getOptionValue("-dataset", "unknown").c_str(), GA.n, GA.m / 2, max_degree, warmup,
                 rounds - warmup, getWorkers());
   }
   const long call = R.calls++;

@@ -62,14 +62,16 @@ XBlossomPro_noreuse_cilk : XBlossomPro.C $(COMMON)
 	$(CILKCXX) -DXBP_REUSE=0 -o $@ $<
 XBlossomPro_counters_cilk : XBlossomPro.C $(COMMON)
 	$(CILKCXX) -DXBP_COUNTERS=1 -o $@ $<
-# XB-Pro's own design (path mutex, per-edge allocations, serial copies) for
-# measure/xb-cpu-opt; XBlossomPro_cilk is the optimized default (XBP_OPT).
+# XB-Pro's own design (path mutex, per-edge allocations, serial copies, its
+# path table) for measure/xb-cpu-opt and xb-llc; XBlossomPro_cilk is the
+# optimized default (XBP_OPT, XBP_TRIPLET).
 XBlossomPro_xbpro_cilk : XBlossomPro.C $(COMMON)
 	$(CILKCXX) -DXBP_OPT=0 -o $@ $<
-# XB-Ligra with XB-Gunrock's compact (triplet) path table and cycle-free
-# blossom handling (XBP_TRIPLET), not the default: measure/xb-ligra-triplet.
-XBlossomPro_triplet_cilk : XBlossomPro.C $(COMMON)
-	$(CILKCXX) -DXBP_TRIPLET=1 -o $@ $<
+# XB-Ligra with XB-Pro's path table (a vector per node, blossoms written out)
+# instead of the default triplet records (XBP_TRIPLET=0): the design
+# comparisons (measure/xb-cpu-opt, xb-llc, xb-ligra-triplet).
+XBlossomPro_vector_cilk : XBlossomPro.C $(COMMON)
+	$(CILKCXX) -DXBP_TRIPLET=0 -o $@ $<
 
 $(COMMON):
 	ln -s ../ligra/$@ .
