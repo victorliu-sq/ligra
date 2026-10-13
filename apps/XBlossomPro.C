@@ -35,11 +35,21 @@
 //   XBP_REUSE    1 = keep trees whose root is still exposed (XB-Pro-Ligra),
 //                0 = rebuild every tree each search phase (XB-Ligra)
 //   XBP_COUNTERS 1 = count reused / reset tree nodes per round (XBCounters lines)
+//   XBP_OPT      1 = the same algorithm without XB-Pro's serial and contended
+//                parts (XB-Pro-Ligra-Opt): augmenting paths go to one flat buffer
+//                per worker instead of a mutex-guarded shared list, path and
+//                blossom walks reuse a per-worker scratch buffer instead of
+//                allocating, a blossom is collected front to back and reversed
+//                once instead of by repeated front inserts, and the per-node
+//                path table reservation and the frontier copies run in parallel
 #ifndef XBP_REUSE
 #define XBP_REUSE 1
 #endif
 #ifndef XBP_COUNTERS
 #define XBP_COUNTERS 0
+#endif
+#ifndef XBP_OPT
+#define XBP_OPT 0
 #endif
 
 #if defined(OPENCILK)
@@ -69,6 +79,10 @@ struct State {
 
   std::vector<std::vector<int>> paths;  // augmenting paths of this phase
   std::mutex paths_mutex;
+  // XBP_OPT: the augmenting paths per worker, path i of worker t being
+  // path_nodes[t][path_start[t][i] .. path_start[t][i + 1] or the end); and a
+  // per-worker scratch buffer for one root path or one blossom.
+  std::vector<std::vector<int>> path_nodes, path_start, scratch;
   // Frontier nodes whose scan gave up a cross-tree edge under contention, per worker.
   std::vector<std::vector<uintE>> dropped;
 
@@ -81,12 +95,37 @@ struct State {
 
   explicit State(long n_) : n(n_), M(n_, -1), is_even(n_, 0), belongs(n_, -1), blossom_to_base(n_, -1),
                             path_table(n_), select_tree(n_), select_match(n_), select_blossom(n_),
-                            dropped(std::max(1, getWorkers())), out(std::max(1, getWorkers())) {
-    for (auto &p : path_table) p.reserve(100);  // as XB-Pro: limits reallocation under concurrent readers
+                            dropped(std::max(1, getWorkers())), out(std::max(1, getWorkers())),
+                            path_nodes(XBP_OPT ? std::max(1, getWorkers()) : 0),
+                            path_start(XBP_OPT ? std::max(1, getWorkers()) : 0),
+                            scratch(XBP_OPT ? std::max(1, getWorkers()) : 0) {
+    // as XB-Pro: limits reallocation under concurrent readers
+    if (XBP_OPT) {
+      parallel_for(long i = 0; i < n_; i++) path_table[i].reserve(100);
+    } else {
+      for (auto &p : path_table) p.reserve(100);
+    }
+  }
+
+  bool have_paths() const {
+    if (!XBP_OPT) return !paths.empty();
+    for (auto &p : path_start)
+      if (!p.empty()) return true;
+    return false;
   }
 
   void emit(int v) { out[WorkerId()].push_back(v); }
 };
+
+// v, then the nodes of its path table entries up to its tree's root, appended to out.
+static void AppendPathToRoot(const State &S, int v, std::vector<int> &out) {
+  out.push_back(v);
+  int cur = v;
+  while (!S.path_table[cur].empty()) {
+    out.insert(out.end(), S.path_table[cur].begin(), S.path_table[cur].end());
+    cur = out.back();
+  }
+}
 
 static std::vector<int> PathToRoot(const State &S, int v) {
   std::vector<int> path{v};
@@ -116,6 +155,17 @@ struct Augment_F {
       int taken = 1;
       S.select_tree[tv].compare_exchange_strong(taken, 0);
       S.dropped[WorkerId()].push_back(v);
+      return false;
+    }
+    if (XBP_OPT) {
+      // root(v) .. v, w .. root(w), written straight into this worker's buffer
+      const int t = WorkerId();
+      std::vector<int> &sc = S.scratch[t], &pn = S.path_nodes[t];
+      sc.clear();
+      AppendPathToRoot(S, v, sc);
+      S.path_start[t].push_back(static_cast<int>(pn.size()));
+      pn.insert(pn.end(), sc.rbegin(), sc.rend());
+      AppendPathToRoot(S, w, pn);
       return false;
     }
     std::vector<int> pv = PathToRoot(S, v), pw = PathToRoot(S, w);
@@ -159,6 +209,22 @@ static void FindBlossom(const State &S, int v, int w, std::vector<int> &blossom)
   }
   int base = cv;
   int cur = v;
+  if (XBP_OPT) {
+    // the v side front to back, reversed once: the same sequence as the front inserts below
+    blossom.push_back(cur);
+    while (cur != base && !S.path_table[cur].empty()) {
+      blossom.insert(blossom.end(), S.path_table[cur].begin(), S.path_table[cur].end());
+      cur = S.path_table[cur].back();
+    }
+    std::reverse(blossom.begin(), blossom.end());
+    cur = w;
+    blossom.push_back(cur);
+    while (cur != base && !S.path_table[cur].empty()) {
+      blossom.insert(blossom.end(), S.path_table[cur].begin(), S.path_table[cur].end());
+      cur = blossom.back();
+    }
+    return;
+  }
   blossom.insert(blossom.begin(), cur);
   while (cur != base && !S.path_table[cur].empty()) {
     blossom.insert(blossom.begin(), S.path_table[cur].rbegin(), S.path_table[cur].rend());
@@ -215,7 +281,8 @@ struct Blossom_F {
 
   inline bool updateAtomic(uintE v, uintE w) {
     if (S.belongs[w] != S.belongs[v] || static_cast<int>(w) == S.M[v] || S.belongs[w] == -1) return false;
-    std::vector<int> blossom;
+    std::vector<int> local;
+    std::vector<int> &blossom = XBP_OPT ? S.scratch[WorkerId()] : local;
     FindBlossom(S, v, w, blossom);
     if (blossom.size() < 3) return false;
     S.blossom_to_base[blossom[0]] = blossom[0];
@@ -225,15 +292,48 @@ struct Blossom_F {
   }
 };
 
+// src[0, n) to dst, in parallel blocks when it is large.
+static void ParCopy(const uintE *src, size_t n, uintE *dst) {
+  const size_t B = 1 << 14;
+  if (n <= 4 * B) {
+    std::copy(src, src + n, dst);
+    return;
+  }
+  parallel_for(size_t b = 0; b < (n + B - 1) / B; b++) {
+    const size_t lo = b * B, hi = std::min(n, lo + B);
+    std::copy(src + lo, src + hi, dst + lo);
+  }
+}
+
 // One edgeMap over `frontier` with functor f; returns nothing (results are in S).
 template <class vertex, class F>
 static void Step(graph<vertex> &GA, const std::vector<uintE> &frontier, F f) {
   if (frontier.empty()) return;
   uintE *idx = newA(uintE, frontier.size());
-  std::copy(frontier.begin(), frontier.end(), idx);
+  if (XBP_OPT) ParCopy(frontier.data(), frontier.size(), idx);
+  else std::copy(frontier.begin(), frontier.end(), idx);
   vertexSubset vs(GA.n, frontier.size(), idx);
   edgeMap(GA, vs, f, -1, no_output | no_dense);
   vs.del();
+}
+
+// dst = a followed by b (XBP_OPT), reusing dst's storage.
+static void Concat(std::vector<uintE> &dst, const std::vector<uintE> &a, const std::vector<uintE> &b) {
+  dst.resize(a.size() + b.size());
+  ParCopy(a.data(), a.size(), dst.data());
+  ParCopy(b.data(), b.size(), dst.data() + a.size());
+}
+
+// The workers' emitted nodes into v (XBP_OPT): one parallel copy per worker.
+static void TakeOutInto(State &S, std::vector<uintE> &v) {
+  const size_t W = S.out.size();
+  std::vector<size_t> off(W + 1, 0);
+  for (size_t t = 0; t < W; t++) off[t + 1] = off[t] + S.out[t].size();
+  v.resize(off[W]);
+  parallel_for(size_t t = 0; t < W; t++) {
+    std::copy(S.out[t].begin(), S.out[t].end(), v.begin() + off[t]);
+    S.out[t].clear();
+  }
 }
 
 static std::vector<uintE> TakeOut(State &S) {
@@ -285,8 +385,13 @@ static void SearchPhase(graph<vertex> &GA, State &S) {
   free(roots);
   free(kept_even);
 
-  std::vector<uintE> frontier(v1);
-  frontier.insert(frontier.end(), v2.begin(), v2.end());
+  std::vector<uintE> frontier, blossom_frontier;
+  if (XBP_OPT) {
+    Concat(frontier, v1, v2);
+  } else {
+    frontier = v1;
+    frontier.insert(frontier.end(), v2.begin(), v2.end());
+  }
   while (true) {
     // 1. Augment. Two workers on the two ends of one edge can each claim one
     // tree, fail on the other and both back off, so neither records the path.
@@ -294,7 +399,7 @@ static void SearchPhase(graph<vertex> &GA, State &S) {
     // that gave up an edge on one worker (which cannot contend) settles it.
     for (auto &d : S.dropped) d.clear();
     Step(GA, frontier, Augment_F(S));
-    if (S.paths.empty()) {
+    if (!S.have_paths()) {
       std::vector<uintE> rescan;
       for (auto &d : S.dropped) {
         rescan.insert(rescan.end(), d.begin(), d.end());
@@ -314,20 +419,30 @@ static void SearchPhase(graph<vertex> &GA, State &S) {
         }
       }
     }
-    if (!S.paths.empty()) return;
+    if (S.have_paths()) return;
 
     // 2. Expand from every even node of the frontier: v1 = the new even nodes.
     Step(GA, frontier, Expand_F(S));
-    v1 = TakeOut(S);
+    if (XBP_OPT) TakeOutInto(S, v1);
+    else v1 = TakeOut(S);
     // 3. Blossoms from the new even nodes and the previous blossom step's
     // (XB-Pro scans v1 + v2 here; v2 starts as the reused trees' even nodes).
-    std::vector<uintE> blossom_frontier(v1);
-    blossom_frontier.insert(blossom_frontier.end(), v2.begin(), v2.end());
+    if (XBP_OPT) {
+      Concat(blossom_frontier, v1, v2);
+    } else {
+      blossom_frontier = v1;
+      blossom_frontier.insert(blossom_frontier.end(), v2.begin(), v2.end());
+    }
     Step(GA, blossom_frontier, Blossom_F(S));
-    v2 = TakeOut(S);
+    if (XBP_OPT) TakeOutInto(S, v2);
+    else v2 = TakeOut(S);
 
-    frontier = v1;
-    frontier.insert(frontier.end(), v2.begin(), v2.end());
+    if (XBP_OPT) {
+      Concat(frontier, v1, v2);
+    } else {
+      frontier = v1;
+      frontier.insert(frontier.end(), v2.begin(), v2.end());
+    }
     if (frontier.empty()) return;
   }
 }
@@ -336,7 +451,22 @@ template <class vertex>
 static void MaximumMatching(graph<vertex> &GA, State &S) {
   while (true) {
     SearchPhase(GA, S);
-    if (S.paths.empty()) return;
+    if (!S.have_paths()) return;
+    if (XBP_OPT) {
+      parallel_for(size_t t = 0; t < S.path_start.size(); t++) {
+        const std::vector<int> &pn = S.path_nodes[t], &ps = S.path_start[t];
+        parallel_for(size_t i = 0; i < ps.size(); i++) {
+          const size_t end = i + 1 < ps.size() ? ps[i + 1] : pn.size();
+          for (size_t j = ps[i]; j + 1 < end; j += 2) {
+            S.M[pn[j]] = pn[j + 1];
+            S.M[pn[j + 1]] = pn[j];
+          }
+        }
+      }
+      for (auto &p : S.path_nodes) p.clear();
+      for (auto &p : S.path_start) p.clear();
+      continue;
+    }
     const long np = S.paths.size();
     parallel_for(long i = 0; i < np; i++) {
       const std::vector<int> &p = S.paths[i];
@@ -392,7 +522,7 @@ void Compute(graph<vertex> &GA, commandLine P) {
     for (long v = 0; v < GA.n; v++) max_degree = std::max<long>(max_degree, GA.V[v].getOutDegree());
     std::printf("XBConfig: arm=ligra variant=%s reuse=%d counters=%d lb=ligra-edgemap dataset=%s nodes=%ld "
                 "edges=%ld max_degree=%ld warmup=%ld rounds=%ld threads=%d\n",
-                XBP_REUSE ? "xb-pro-ligra" : "xb-ligra", XBP_REUSE, XBP_COUNTERS, P.getOptionValue("-dataset", "unknown").c_str(), GA.n, GA.m / 2, max_degree, warmup,
+                XBP_OPT ? "xb-pro-ligra-opt" : XBP_REUSE ? "xb-pro-ligra" : "xb-ligra", XBP_REUSE, XBP_COUNTERS, P.getOptionValue("-dataset", "unknown").c_str(), GA.n, GA.m / 2, max_degree, warmup,
                 rounds - warmup, getWorkers());
   }
   const long call = R.calls++;
