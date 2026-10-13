@@ -55,11 +55,14 @@ add_ligra_cilk_app(ligra_xblossom_noreuse_cilk XBlossomPro_noreuse)
 add_ligra_cilk_app(ligra_xblossom_pro_counters_cilk XBlossomPro_counters)
 # XB-Pro's own design (path mutex, per-edge allocations, serial copies), for measure/xb-cpu-opt.
 add_ligra_cilk_app(ligra_xblossom_pro_xbpro_cilk XBlossomPro_xbpro)
+# XBP_SPAN (shorter serial work inside a step), not the default.
+add_ligra_cilk_app(ligra_xblossom_pro_span_cilk XBlossomPro_span)
 
 add_ligra_cilkscale_app(ligra_bfs_cilkscale BFS)
 add_ligra_cilkscale_app(ligra_sssp_cilkscale SSSP)
 add_ligra_cilkscale_app(ligra_multisssp_cilkscale MultiSSSP)
 add_ligra_cilkscale_app(ligra_xblossom_pro_cilkscale XBlossomPro)
+add_ligra_cilkscale_app(ligra_xblossom_pro_span_cilkscale XBlossomPro_span)
 
 add_custom_target(ligra_cilk ALL
     DEPENDS ligra_bfs_cilk ligra_sssp_cilk ligra_multisssp_cilk
@@ -67,5 +70,6 @@ add_custom_target(ligra_cilk ALL
             ligra_xblossom_pro_cilk ligra_xblossom_noreuse_cilk ligra_xblossom_pro_counters_cilk
             ligra_xblossom_pro_xbpro_cilk
             ligra_bfs_cilkscale ligra_sssp_cilkscale ligra_multisssp_cilkscale ligra_xblossom_pro_cilkscale
+            ligra_xblossom_pro_span_cilk ligra_xblossom_pro_span_cilkscale
     COMMENT "Build the Ligra apps with OpenCilk: BFS, SSSP, MultiSSSP (+ _Throughput), XBlossomPro"
 )
