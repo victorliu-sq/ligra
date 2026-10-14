@@ -72,12 +72,6 @@ XBlossomPro_xbpro_cilk : XBlossomPro.C $(COMMON)
 # comparisons (measure/xb-cpu-opt, xb-llc, xb-ligra-triplet).
 XBlossomPro_vector_cilk : XBlossomPro.C $(COMMON)
 	$(CILKCXX) -DXBP_TRIPLET=0 -o $@ $<
-# XB-Ligra letting Ligra run large steps dense (XBP_DENSE), not the default:
-# measure/xb-ligra-dense.
-XBlossomPro_dense_cilk : XBlossomPro.C $(COMMON)
-	$(CILKCXX) -DXBP_DENSE=1 -o $@ $<
-XBlossomPro_dense_cilkscale : XBlossomPro.C $(COMMON)
-	$(CILKCXX) -fcilktool=cilkscale -DGACGE_CILKSCALE -DXBP_DENSE=1 -o $@ $<
 
 $(COMMON):
 	ln -s ../ligra/$@ .

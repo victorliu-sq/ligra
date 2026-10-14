@@ -77,16 +77,6 @@
 #ifndef XBP_TRIPLET
 #define XBP_TRIPLET XBP_OPT
 #endif
-// XBP_DENSE 1 = (XBlossomPro_dense_cilk, not the default) let Ligra run a step
-//              dense (pull: one task per graph vertex, scanning its neighbours
-//              for frontier vertices) when the frontier and its edges exceed
-//              5% of the graph's edges, as BFS / SSSP / MSSP do; 0 = always
-//              sparse (push from the frontier, XB-Pro's way, no_dense). Every
-//              update claims what it changes (tree, match, odd node) with an
-//              atomic, so the same edges give the same result from either side.
-#ifndef XBP_DENSE
-#define XBP_DENSE 0
-#endif
 #if XBP_TRIPLET && !XBP_OPT
 #error "XBP_TRIPLET builds on XBP_OPT"
 #endif
@@ -511,7 +501,12 @@ static void Step(graph<vertex> &GA, const std::vector<uintE> &frontier, F f) {
   if (XBP_OPT) ParCopy(frontier.data(), frontier.size(), idx);
   else std::copy(frontier.begin(), frontier.end(), idx);
   vertexSubset vs(GA.n, frontier.size(), idx);
-  edgeMap(GA, vs, f, -1, XBP_DENSE ? no_output : no_output | no_dense);
+  // Always sparse (push from the frontier): letting Ligra pull large steps
+  // dense made no graph faster and Amazon, Patent, Hyperlink and LiveJournal
+  // 1.2-2.7x slower (2026-10-13): augment and blossom keep their condition
+  // after an update, so a pulled vertex scans all its edges, and the changed
+  // claim order costs more phases on large graphs.
+  edgeMap(GA, vs, f, -1, no_output | no_dense);
   vs.del();
 }
 
@@ -752,7 +747,7 @@ void Compute(graph<vertex> &GA, commandLine P) {
     for (long v = 0; v < GA.n; v++) max_degree = std::max<long>(max_degree, GA.V[v].getOutDegree());
     std::printf("XBConfig: arm=ligra variant=%s reuse=%d counters=%d opt=%d triplet=%d lb=ligra-edgemap dataset=%s nodes=%ld "
                 "edges=%ld max_degree=%ld warmup=%ld rounds=%ld threads=%d\n",
-                !XBP_OPT ? "xb-pro-ligra-xbpro" : !XBP_TRIPLET ? "xb-pro-ligra-vector" : XBP_DENSE ? "xb-pro-ligra-dense" : XBP_REUSE ? "xb-pro-ligra" : "xb-ligra",
+                !XBP_OPT ? "xb-pro-ligra-xbpro" : !XBP_TRIPLET ? "xb-pro-ligra-vector" : XBP_REUSE ? "xb-pro-ligra" : "xb-ligra",
                 XBP_REUSE, XBP_COUNTERS, XBP_OPT, XBP_TRIPLET, P.getOptionValue("-dataset", "unknown").c_str(), GA.n, GA.m / 2, max_degree, warmup,
                 rounds - warmup, getWorkers());
   }
