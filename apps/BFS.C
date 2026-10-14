@@ -45,15 +45,9 @@ void Compute(graph<vertex>& GA, commandLine P) {
   uintE* Parents = newA(uintE,n);
   parallel_for(long i=0;i<n;i++) Parents[i] = UINT_E_MAX;
   Parents[start] = start;
-  // Push only by default (GACGE): every step scans its frontier's out-edges, as
-  // Gunrock's BFS. -diropt restores Ligra's direction optimization (a step
-  // past the 5% threshold pulls: each unvisited vertex scans its in-edges until
-  // it finds a parent), which examines fewer edges than the GPU side does.
-  const bool diropt = P.getOption("-diropt");
-  const flags fl = diropt ? 0 : no_dense;
   vertexSubset Frontier(n,start); //creates initial frontier
   while(!Frontier.isEmpty()){ //loop until frontier is empty
-    vertexSubset output = edgeMap(GA, Frontier, BFS_F(Parents), -1, fl);    
+    vertexSubset output = edgeMap(GA, Frontier, BFS_F(Parents));    
     Frontier.del();
     Frontier = output; //set new frontier
   } 
