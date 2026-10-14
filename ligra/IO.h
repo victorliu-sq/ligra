@@ -22,6 +22,7 @@
 // OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 // WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #pragma once
+#include "gacge_bin.h"
 #include <iostream>
 #include <fstream>
 #include <stdlib.h>
@@ -466,8 +467,48 @@ graph<vertex> readGraphFromBinary(char* iFile, bool isSymmetric) {
 #endif
 }
 
+// A GACGE binary CSR (<name>.bin; gacge_bin.h), symmetric graphs only: the
+// offsets and neighbors (and, WEIGHTED, <name>.w.bin's weights) copied in
+// parallel from a read-only mapping.
+template <class vertex>
+graph<vertex> readGraphFromGacgeBin(char* iFile, bool isSymmetric) {
+  if (!isSymmetric) gacge_bin::fail(iFile, "only symmetric graphs (-s) are stored in GACGE binary form");
+  gacge_bin::Mapped g = gacge_bin::map_file(iFile, gacge_bin::kGraph);
+  const long n = g.h.n, m = g.h.m;
+  const uint32_t* row = g.a;
+  const uint32_t* col = g.b;
+#ifndef WEIGHTED
+  uintE* edges = newA(uintE, m);
+  {parallel_for(long i = 0; i < m; i++) edges[i] = col[i];}
+#else
+  const std::string wpath = gacge_bin::weights_path(iFile);
+  gacge_bin::Mapped w = gacge_bin::map_file(wpath, gacge_bin::kWeights);
+  if ((long)w.h.m != m) gacge_bin::fail(wpath, "weight count != the graph's edge count");
+  intE* edges = newA(intE, 2 * m);
+  {parallel_for(long i = 0; i < m; i++) {
+    edges[2 * i] = col[i];
+    edges[2 * i + 1] = (intE)w.a[i];
+  }}
+  gacge_bin::unmap(w);
+#endif
+  vertex* v = newA(vertex, n);
+  {parallel_for(long i = 0; i < n; i++) {
+    const uintT o = row[i];
+    v[i].setOutDegree(row[i + 1] - o);
+#ifndef WEIGHTED
+    v[i].setOutNeighbors(edges + o);
+#else
+    v[i].setOutNeighbors(edges + 2 * o);
+#endif
+  }}
+  gacge_bin::unmap(g);
+  Uncompressed_Mem<vertex>* mem = new Uncompressed_Mem<vertex>(v, n, m, edges);
+  return graph<vertex>(v, n, m, mem);
+}
+
 template <class vertex>
 graph<vertex> readGraph(char* iFile, bool compressed, bool symmetric, bool binary, bool mmap) {
+  if (gacge_bin::is_bin(iFile)) return readGraphFromGacgeBin<vertex>(iFile, symmetric);
   if(binary) return readGraphFromBinary<vertex>(iFile,symmetric);
   else return readGraphFromFile<vertex>(iFile,symmetric,mmap);
 }
