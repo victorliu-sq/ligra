@@ -114,14 +114,38 @@ static inline int WorkerId() { return 0; }
 
 namespace xbp {
 
+// Vectors whose elements start uninitialized (XBP_OPT fills them in parallel):
+// std::vector zero-fills new elements serially, on construction and on resize.
+template <class T>
+struct NoInitAlloc : std::allocator<T> {
+  template <class U>
+  struct rebind {
+    using other = NoInitAlloc<U>;
+  };
+  NoInitAlloc() = default;
+  template <class U>
+  NoInitAlloc(const NoInitAlloc<U> &) noexcept {}
+  template <class U>
+  void construct(U *p) noexcept(std::is_nothrow_default_constructible<U>::value) {
+    ::new (static_cast<void *>(p)) U;
+  }
+  template <class U, class... A>
+  void construct(U *p, A &&...a) {
+    ::new (static_cast<void *>(p)) U(std::forward<A>(a)...);
+  }
+};
+using Frontier = std::vector<uintE, NoInitAlloc<uintE>>;  // a frontier, filled by parallel copies
+using Ints = std::vector<int, NoInitAlloc<int>>;          // a per-node field
+using Flags = std::vector<std::atomic<int>, NoInitAlloc<std::atomic<int>>>;
+
 struct State {
   long n = 0;
-  std::vector<int> M;         // mate, -1 = exposed
-  std::vector<int> is_even;   // 1 = even node of a tree
-  std::vector<int> belongs;   // tree (root) of a node, -1 = none
-  std::vector<int> blossom_to_base;
+  Ints M;         // mate, -1 = exposed
+  Ints is_even;   // 1 = even node of a tree
+  Ints belongs;   // tree (root) of a node, -1 = none
+  Ints blossom_to_base;
   std::vector<std::vector<int>> path_table;  // node -> nodes towards its root
-  std::vector<std::atomic<int>> select_tree, select_match, select_blossom;
+  Flags select_tree, select_match, select_blossom;
 
   std::vector<std::vector<int>> paths;  // augmenting paths of this phase
   std::mutex paths_mutex;
@@ -144,7 +168,7 @@ struct State {
   // Tree nodes reused / reset at the start of each search phase (XBP_COUNTERS).
   std::atomic<unsigned long long> reused_tree_nodes{0}, reset_tree_nodes{0};
 
-  explicit State(long n_) : n(n_), M(n_, -1), is_even(n_, 0), belongs(n_, -1), blossom_to_base(n_, -1),
+  explicit State(long n_) : n(n_), M(n_), is_even(n_), belongs(n_), blossom_to_base(n_),
                             path_table(XBP_TRIPLET ? 0 : n_), select_tree(n_), select_match(n_), select_blossom(n_),
                             dropped(std::max(1, getWorkers())), out(std::max(1, getWorkers())),
                             path_nodes(XBP_OPT ? std::max(1, getWorkers()) : 0),
@@ -152,6 +176,22 @@ struct State {
                             scratch(XBP_OPT ? std::max(1, getWorkers()) : 0),
                             aug_pairs(XBP_TRIPLET ? std::max(1, getWorkers()) : 0),
                             tasks(XBP_TRIPLET ? std::max(1, getWorkers()) : 0) {
+    // Every per-node field in one pass, parallel under XBP_OPT (XB-Pro's
+    // design: serial, as std::vector's fill constructor).
+    auto init = [this](long x) {
+      M[x] = -1;
+      is_even[x] = 0;
+      belongs[x] = -1;
+      blossom_to_base[x] = -1;
+      select_tree[x].store(0, std::memory_order_relaxed);
+      select_match[x].store(0, std::memory_order_relaxed);
+      select_blossom[x].store(0, std::memory_order_relaxed);
+    };
+    if (XBP_OPT) {
+      parallel_for(long x = 0; x < n_; x++) init(x);
+    } else {
+      for (long x = 0; x < n_; x++) init(x);
+    }
     if (XBP_TRIPLET) {
       rec = newA(int, 3 * n_);
       parallel_for(long i = 0; i < 3 * n_; i++) rec[i] = -1;
@@ -506,29 +546,6 @@ static void ParCopy(const uintE *src, size_t n, uintE *dst) {
   parallel_for(size_t i = 0; i < n; i++) dst[i] = src[i];
 }
 
-// A frontier vector whose resize leaves new elements uninitialized (XBP_OPT
-// always fills them by a parallel copy): std::vector's resize zero-fills them
-// serially first.
-template <class T>
-struct NoInitAlloc : std::allocator<T> {
-  template <class U>
-  struct rebind {
-    using other = NoInitAlloc<U>;
-  };
-  NoInitAlloc() = default;
-  template <class U>
-  NoInitAlloc(const NoInitAlloc<U> &) noexcept {}
-  template <class U>
-  void construct(U *p) noexcept(std::is_nothrow_default_constructible<U>::value) {
-    ::new (static_cast<void *>(p)) U;
-  }
-  template <class U, class... A>
-  void construct(U *p, A &&...a) {
-    ::new (static_cast<void *>(p)) U(std::forward<A>(a)...);
-  }
-};
-using Frontier = std::vector<uintE, NoInitAlloc<uintE>>;
-
 // One edgeMap over `frontier` with functor f; returns nothing (results are in S).
 template <class vertex, class F>
 static void Step(graph<vertex> &GA, const Frontier &frontier, F f) {
@@ -757,7 +774,7 @@ static void MaximumMatching(graph<vertex> &GA, State &S) {
 
 // Matching size if mate is a valid matching of GA (mutual, along edges), else -1.
 template <class vertex>
-static long CheckMatching(graph<vertex> &GA, const std::vector<int> &M) {
+static long CheckMatching(graph<vertex> &GA, const Ints &M) {
   const long n = GA.n;
   long *ok = newA(long, n);
   parallel_for(long v = 0; v < n; v++) {
