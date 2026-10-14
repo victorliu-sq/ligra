@@ -93,6 +93,8 @@ static inline int WorkerId() { return 0; }
 #include <cstdio>
 #include <mutex>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 // Cilkscale (GACGE_CILKSCALE): the work and span of a part of one Compute(),
@@ -492,27 +494,51 @@ struct Blossom_F {
   }
 };
 
-// src[0, n) to dst, in parallel blocks when it is large.
+// src[0, n) to dst, in parallel when it is large. An element loop: written as
+// a cilk_for over 16 K blocks of std::copy it ran serially inside the search
+// phase (Cilkscale on 48 workers: parallelism 1.0, a quarter of the matching's
+// span on Wikipedia and LiveJournal; 2026-10-14), parallel only in isolation.
 static void ParCopy(const uintE *src, size_t n, uintE *dst) {
-  const size_t B = 1 << 14;
-  if (n <= 4 * B) {
+  if (n <= (1 << 16)) {
     std::copy(src, src + n, dst);
     return;
   }
-  parallel_for(size_t b = 0; b < (n + B - 1) / B; b++) {
-    const size_t lo = b * B, hi = std::min(n, lo + B);
-    std::copy(src + lo, src + hi, dst + lo);
-  }
+  parallel_for(size_t i = 0; i < n; i++) dst[i] = src[i];
 }
+
+// A frontier vector whose resize leaves new elements uninitialized (XBP_OPT
+// always fills them by a parallel copy): std::vector's resize zero-fills them
+// serially first.
+template <class T>
+struct NoInitAlloc : std::allocator<T> {
+  template <class U>
+  struct rebind {
+    using other = NoInitAlloc<U>;
+  };
+  NoInitAlloc() = default;
+  template <class U>
+  NoInitAlloc(const NoInitAlloc<U> &) noexcept {}
+  template <class U>
+  void construct(U *p) noexcept(std::is_nothrow_default_constructible<U>::value) {
+    ::new (static_cast<void *>(p)) U;
+  }
+  template <class U, class... A>
+  void construct(U *p, A &&...a) {
+    ::new (static_cast<void *>(p)) U(std::forward<A>(a)...);
+  }
+};
+using Frontier = std::vector<uintE, NoInitAlloc<uintE>>;
 
 // One edgeMap over `frontier` with functor f; returns nothing (results are in S).
 template <class vertex, class F>
-static void Step(graph<vertex> &GA, const std::vector<uintE> &frontier, F f) {
+static void Step(graph<vertex> &GA, const Frontier &frontier, F f) {
   if (frontier.empty()) return;
   gacge_phase() = F::kPhase;
-  uintE *idx = newA(uintE, frontier.size());
-  if (XBP_OPT) ParCopy(frontier.data(), frontier.size(), idx);
-  else std::copy(frontier.begin(), frontier.end(), idx);
+  // XBP_OPT: the vertex subset reads the frontier in place (edgeMap neither
+  // changes nor frees a sparse subset's indices); XB-Pro copies it into a
+  // fresh array every step.
+  uintE *idx = XBP_OPT ? const_cast<uintE *>(frontier.data()) : newA(uintE, frontier.size());
+  if (!XBP_OPT) std::copy(frontier.begin(), frontier.end(), idx);
   vertexSubset vs(GA.n, frontier.size(), idx);
   // Always sparse (push from the frontier): letting Ligra pull large steps
   // dense made no graph faster and Amazon, Patent, Hyperlink and LiveJournal
@@ -520,18 +546,18 @@ static void Step(graph<vertex> &GA, const std::vector<uintE> &frontier, F f) {
   // after an update, so a pulled vertex scans all its edges, and the changed
   // claim order costs more phases on large graphs.
   edgeMap(GA, vs, f, -1, no_output | no_dense);
-  vs.del();
+  if (!XBP_OPT) vs.del();
 }
 
 // dst = a followed by b (XBP_OPT), reusing dst's storage.
-static void Concat(std::vector<uintE> &dst, const std::vector<uintE> &a, const std::vector<uintE> &b) {
+static void Concat(Frontier &dst, const Frontier &a, const Frontier &b) {
   dst.resize(a.size() + b.size());
   ParCopy(a.data(), a.size(), dst.data());
   ParCopy(b.data(), b.size(), dst.data() + a.size());
 }
 
 // The workers' emitted nodes into v (XBP_OPT): one parallel copy per worker.
-static void TakeOutInto(State &S, std::vector<uintE> &v) {
+static void TakeOutInto(State &S, Frontier &v) {
   const size_t W = S.out.size();
   std::vector<size_t> off(W + 1, 0);
   for (size_t t = 0; t < W; t++) off[t + 1] = off[t] + S.out[t].size();
@@ -542,8 +568,8 @@ static void TakeOutInto(State &S, std::vector<uintE> &v) {
   }
 }
 
-static std::vector<uintE> TakeOut(State &S) {
-  std::vector<uintE> v;
+static Frontier TakeOut(State &S) {
+  Frontier v;
   for (auto &o : S.out) {
     v.insert(v.end(), o.begin(), o.end());
     o.clear();
@@ -587,13 +613,22 @@ static void SearchPhase(graph<vertex> &GA, State &S) {
   }
   _seq<uintE> r = sequence::packIndex<uintE>(roots, n);
   _seq<uintE> k = sequence::packIndex<uintE>(kept_even, n);
-  std::vector<uintE> v1(r.A, r.A + r.n), v2(k.A, k.A + k.n);
+  Frontier v1, v2;
+  if (XBP_OPT) {  // parallel copies (XB-Pro: serial ones, as std::vector's range constructor)
+    v1.resize(r.n);
+    v2.resize(k.n);
+    ParCopy(r.A, r.n, v1.data());
+    ParCopy(k.A, k.n, v2.data());
+  } else {
+    v1.assign(r.A, r.A + r.n);
+    v2.assign(k.A, k.A + k.n);
+  }
   r.del();
   k.del();
   free(roots);
   free(kept_even);
 
-  std::vector<uintE> frontier, blossom_frontier;
+  Frontier frontier, blossom_frontier;
   if (XBP_OPT) {
     Concat(frontier, v1, v2);
   } else {
