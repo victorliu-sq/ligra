@@ -198,27 +198,34 @@ static inline int Anchor(const State &S, int x) {
 
 // The base of the blossom closed by (v, w): the first anchor the two anchor
 // chains share (each walks to its root, then switches to the other side's
-// start). -1 if the chains never meet (a forest read mid-update).
-static int FindBaseByAnchor(const State &S, int v, int w) {
+// start). -1 if the chains never meet (a forest read mid-update). *steps: the
+// walk's iterations.
+static int FindBaseByAnchor(const State &S, int v, int w, long *steps) {
   int cv = v, cw = w;
   long it = 0;
   while (cv != cw) {
     cv = RecEmpty(S, cv) ? w : Anchor(S, cv);
     cw = RecEmpty(S, cw) ? v : Anchor(S, cw);
-    if (++it > 2 * S.n + 2) return -1;
+    if (++it > 2 * S.n + 2) {
+      *steps = it;
+      return -1;
+    }
   }
+  *steps = it;
   return cv;
 }
 
 // Claim every node on s's anchor chain down to base that was odd when it was
 // recorded (the w of each expand record) and is still odd: one task
-// (u, s, o, base) per claim, applied after the step.
-static void ClaimOddOnChain(State &S, int s, int o, int base) {
+// (u, s, o, base) per claim, applied after the step. Returns the records visited.
+static long ClaimOddOnChain(State &S, int s, int o, int base) {
   std::vector<int> &tk = S.tasks[WorkerId()];
   int cur = s;
+  long visited = 0;
   while (cur != base) {
     const int *r = S.rec + 3 * static_cast<size_t>(cur);
-    if (r[0] == -1) return;  // the root without meeting the base
+    visited++;
+    if (r[0] == -1) return visited;  // the root without meeting the base
     if (r[2] == -1) {
       const int u = r[0];
       int e = 0;
@@ -231,6 +238,7 @@ static void ClaimOddOnChain(State &S, int s, int o, int base) {
     }
     cur = r[2] == -1 ? r[1] : r[2];
   }
+  return visited;
 }
 
 // Flip the matched pairs of route(x) up to its root. A blossom record
@@ -244,9 +252,11 @@ static void FlipRoute(State &S, int x) {
   Walk stack[256];
   int depth = 0;
   Walk cur{x, -1};
+  unsigned long visited = 0;  // records (GACGE_REGIONS: the walk's length)
   while (true) {
     while (true) {
       const int *r = S.rec + 3 * static_cast<size_t>(cur.x);
+      visited++;
       if (r[0] == -1) break;  // the root
       if (r[2] == -1) {
         if (cur.stop >= 0 && r[0] == cur.stop) break;
@@ -267,6 +277,7 @@ static void FlipRoute(State &S, int x) {
     if (depth == 0) break;
     cur = stack[--depth];
   }
+  gacge_walk(visited);
 }
 
 // v, then the nodes of its path table entries up to its tree's root, appended to out.
@@ -462,10 +473,12 @@ struct Blossom_F {
   inline bool updateAtomic(uintE v, uintE w) {
     if (S.belongs[w] != S.belongs[v] || static_cast<int>(w) == S.M[v] || S.belongs[w] == -1) return false;
     if (XBP_TRIPLET) {
-      const int base = FindBaseByAnchor(S, v, w);
+      long steps = 0;
+      const int base = FindBaseByAnchor(S, v, w, &steps);
       if (base < 0) return false;
-      ClaimOddOnChain(S, v, w, base);
-      ClaimOddOnChain(S, w, v, base);
+      steps += ClaimOddOnChain(S, v, w, base);
+      steps += ClaimOddOnChain(S, w, v, base);
+      gacge_walk(static_cast<unsigned long>(steps));  // one serial strand: base walk + both claims
       return false;
     }
     std::vector<int> local;
@@ -587,6 +600,7 @@ static void SearchPhase(graph<vertex> &GA, State &S) {
     frontier = v1;
     frontier.insert(frontier.end(), v2.begin(), v2.end());
   }
+  gacge_cut("forest");  // GACGE_REGIONS: resetting the forest and packing its frontier
   while (true) {
     // 1. Augment. Two workers on the two ends of one edge can each claim one
     // tree, fail on the other and both back off, so neither records the path.
@@ -653,6 +667,7 @@ static void SearchPhase(graph<vertex> &GA, State &S) {
       frontier = v1;
       frontier.insert(frontier.end(), v2.begin(), v2.end());
     }
+    gacge_cut("apply");  // the blossom's claims applied, the next frontier packed
     if (frontier.empty()) return;
   }
 }
@@ -675,6 +690,7 @@ static void MaximumMatching(graph<vertex> &GA, State &S) {
         }
       }
       for (auto &ap : S.aug_pairs) ap.clear();
+      gacge_cut("flip");  // GACGE_REGIONS: the phase's augmenting paths flipped
       continue;
     }
     if (XBP_OPT) {
@@ -756,9 +772,11 @@ void Compute(graph<vertex> &GA, commandLine P) {
   auto t0 = std::chrono::steady_clock::now();
   XBP_WS_BEGIN(ws_init);
   xbp::State S(GA.n);
+  gacge_cut("init");  // GACGE_REGIONS: the state's allocation
   XBP_WS_END(ws_init, "init", call);
   XBP_WS_BEGIN(ws_match);
   xbp::MaximumMatching(GA, S);
+  gacge_cut("tail");  // the last phase's end; the check follows as the run's last region
   XBP_WS_END(ws_match, "match", call);
   double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 

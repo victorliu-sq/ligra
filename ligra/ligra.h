@@ -270,25 +270,95 @@ inline void gacge_report(int run, long n, long m) {
 // the work and span of each Compute(), one CSV row per run tagged run<r>
 // (tag,work,span,parallelism,burdened_span,burdened_parallelism), printed with
 // the whole program's row when the program ends.
+//
+// GACGE_REGIONS (env): each Compute() is cut into consecutive regions, one per
+// edgeMap call (kind=step, named by gacge_phase()) and one per stretch of code
+// between two cuts (kind=between, or the name an app gives it by calling
+// gacge_cut(name) where the stretch ends, e.g. X-Blossom's flip). One line per
+// region:
+//   XBRegion: run=<r> idx=<i> kind=<k> phase=<p> frontier_v=<n> frontier_e=<n>
+//             max_walk=<n> work=<raw> span=<raw> bspan=<raw>   (Cilkscale build)
+//             ... time_ns=<ns>                                 (other builds)
+// The regions' works add up to the run's (the raw unit is Cilkscale's; the
+// run<r> row gives the run's work in seconds). max_walk: the longest serial walk
+// an app reported in the region through gacge_walk(length) (X-Blossom: records
+// visited by one flip or one base walk and its claims); frontier_* are 0 for
+// between regions.
+inline bool gacge_regions() {
+  static const bool on = std::getenv("GACGE_REGIONS") != nullptr;
+  return on;
+}
+inline std::atomic<unsigned long>& gacge_walk_max() { static std::atomic<unsigned long> v{0}; return v; }
+inline void gacge_walk(unsigned long len) {
+  if (!gacge_regions()) return;
+  unsigned long cur = gacge_walk_max().load(std::memory_order_relaxed);
+  while (len > cur && !gacge_walk_max().compare_exchange_weak(cur, len, std::memory_order_relaxed)) {}
+}
+struct gacge_region_state {
+  int run = -1;
+  unsigned long idx = 0, fv = 0, fe = 0;
+};
+inline gacge_region_state& gacge_rs() { static gacge_region_state s; return s; }
 #ifdef GACGE_CILKSCALE
 #include <cilk/cilkscale.h>
 inline wsp_t &gacge_ws0() { static wsp_t w; return w; }
-inline void gacge_ws_begin() { gacge_ws0() = wsp_getworkspan(); }
+inline wsp_t &gacge_cut0() { static wsp_t w; return w; }
+inline void gacge_cut_at(const char* kind, const char* phase) {
+  if (!gacge_regions()) return;
+  const wsp_t now = wsp_getworkspan(), d = wsp_sub(now, gacge_cut0());
+  gacge_region_state& s = gacge_rs();
+  std::printf("XBRegion: run=%d idx=%lu kind=%s phase=%s frontier_v=%lu frontier_e=%lu max_walk=%lu work=%lld span=%lld "
+              "bspan=%lld\n", s.run, s.idx++, kind, phase, s.fv, s.fe, gacge_walk_max().exchange(0),
+              (long long)d.work, (long long)d.span, (long long)d.bspan);
+  s.fv = s.fe = 0;
+  gacge_cut0() = wsp_getworkspan();  // the printing is no region's
+}
+inline void gacge_ws_begin() {
+  gacge_rs().run++;
+  gacge_rs().idx = 0;
+  gacge_walk_max() = 0;
+  gacge_ws0() = gacge_cut0() = wsp_getworkspan();
+}
 inline void gacge_ws_end(int run) {
+  gacge_cut_at("between", "-");
   wsp_t d = wsp_sub(wsp_getworkspan(), gacge_ws0());
   char tag[32];
   std::snprintf(tag, sizeof tag, "run%d", run);
   wsp_dump(d, tag);
 }
 #else
-inline void gacge_ws_begin() {}
-inline void gacge_ws_end(int) {}
+#include <chrono>
+inline std::chrono::steady_clock::time_point& gacge_cut0() {
+  static std::chrono::steady_clock::time_point t;
+  return t;
+}
+inline void gacge_cut_at(const char* kind, const char* phase) {
+  if (!gacge_regions()) return;
+  const auto now = std::chrono::steady_clock::now();
+  gacge_region_state& s = gacge_rs();
+  std::printf("XBRegion: run=%d idx=%lu kind=%s phase=%s frontier_v=%lu frontier_e=%lu max_walk=%lu time_ns=%lld\n",
+              s.run, s.idx++, kind, phase, s.fv, s.fe, gacge_walk_max().exchange(0),
+              (long long)std::chrono::duration_cast<std::chrono::nanoseconds>(now - gacge_cut0()).count());
+  s.fv = s.fe = 0;
+  gacge_cut0() = std::chrono::steady_clock::now();  // the printing is no region's
+}
+inline void gacge_ws_begin() {
+  if (!gacge_regions()) return;
+  gacge_rs().run++;
+  gacge_rs().idx = 0;
+  gacge_walk_max() = 0;
+  gacge_cut0() = std::chrono::steady_clock::now();
+}
+inline void gacge_ws_end(int) { gacge_cut_at("between", "-"); }
 #endif
+// Ends the current stretch of code as a region named kind (GACGE_REGIONS).
+inline void gacge_cut(const char* kind) { gacge_cut_at(kind, "-"); }
 
 template <class data, class vertex, class VS, class F>
-vertexSubsetData<data> edgeMapData(graph<vertex>& GA, VS &vs, F f,
-    intT threshold = -1, const flags& fl=0) {
+vertexSubsetData<data> edgeMapDataImpl(graph<vertex>& GA, VS &vs, F f,
+    intT threshold, const flags& fl) {
   long numVertices = GA.n, numEdges = GA.m, m = vs.numNonzeros();
+  gacge_rs().fv = m;
   if(threshold == -1) threshold = numEdges/20; //default threshold
   vertex *G = GA.V;
   if (numVertices != vs.numRows()) {
@@ -310,6 +380,7 @@ vertexSubsetData<data> edgeMapData(graph<vertex>& GA, VS &vs, F f,
 	frontierVertices[i] = v;
       }}
     outDegrees = sequence::plusReduce(degrees, m);
+    gacge_rs().fe = outDegrees;
     if (gacge_stats()) { gacge_steps()++; gacge_frontier_e() += outDegrees; }
     if (gacge_trace()) {
       const uintT max_deg = sequence::reduce<uintT>(degrees, m, maxF<uintT>());
@@ -335,6 +406,16 @@ vertexSubsetData<data> edgeMapData(graph<vertex>& GA, VS &vs, F f,
     free(degrees); free(frontierVertices);
     return vs_out;
   }
+}
+
+// One edgeMap call is one region (GACGE_REGIONS), the code since the last cut another.
+template <class data, class vertex, class VS, class F>
+vertexSubsetData<data> edgeMapData(graph<vertex>& GA, VS &vs, F f,
+    intT threshold = -1, const flags& fl=0) {
+  gacge_cut("between");
+  auto out = edgeMapDataImpl<data, vertex, VS, F>(GA, vs, f, threshold, fl);
+  gacge_cut_at("step", gacge_phase());
+  return out;
 }
 
 // Regular edgeMap, where no extra data is stored per vertex.
