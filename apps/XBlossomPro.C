@@ -91,11 +91,27 @@ static inline int WorkerId() { return 0; }
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+// GACGE_XB_LOAD_FIRST=1: read a claim flag before its compare-and-swap and
+// skip the CAS when the flag is already taken (test-and-test-and-set). Every
+// claim has the same outcome; the A/B question (2026-10-14) is whether the
+// failed seq_cst CASes on flags other workers own are what makes web graphs
+// (2-17 billion blossom closing edges) slow on the CPU.
+static const bool kLoadFirst = [] {
+  const char *e = std::getenv("GACGE_XB_LOAD_FIRST");
+  return e != nullptr && e[0] == '1';
+}();
+static inline bool TryClaim(std::atomic<int> &flag) {
+  if (kLoadFirst && flag.load(std::memory_order_relaxed) != 0) return false;
+  int expected = 0;
+  return flag.compare_exchange_strong(expected, 1);
+}
 
 // Cilkscale (GACGE_CILKSCALE): the work and span of a part of one Compute(),
 // one CSV row tagged <name><call> (init, match, check) next to ligra.h's run<r>.
@@ -270,8 +286,7 @@ static long ClaimOddOnChain(State &S, int s, int o, int base) {
     if (r[0] == -1) return visited;  // the root without meeting the base
     if (r[2] == -1) {
       const int u = r[0];
-      int e = 0;
-      if (!S.is_even[u] && S.select_blossom[u].compare_exchange_strong(e, 1)) {
+      if (!S.is_even[u] && TryClaim(S.select_blossom[u])) {
         tk.push_back(u);
         tk.push_back(s);
         tk.push_back(o);
@@ -359,9 +374,8 @@ struct Augment_F {
       // records a path: no pass ends empty because of mutual back-off, and the
       // serial rescan below is not needed.
       const int lo = std::min(tv, tw), hi = std::max(tv, tw);
-      int e1 = 0, e2 = 0;
-      if (!S.select_tree[lo].compare_exchange_strong(e1, 1)) return false;
-      if (!S.select_tree[hi].compare_exchange_strong(e2, 1)) {
+      if (!TryClaim(S.select_tree[lo])) return false;
+      if (!TryClaim(S.select_tree[hi])) {
         S.select_tree[lo].store(0);
         return false;
       }
@@ -413,8 +427,7 @@ struct Expand_F {
   inline bool update(uintE v, uintE w) { return updateAtomic(v, w); }
   inline bool updateAtomic(uintE v, uintE w) {
     int x = S.M[w];
-    int expected = 0;
-    if (!S.select_match[std::min<int>(w, x)].compare_exchange_strong(expected, 1)) return false;
+    if (!TryClaim(S.select_match[std::min<int>(w, x)])) return false;
     if (XBP_TRIPLET) {
       SetRec(S, x, w, v, -1);
     } else {
@@ -814,10 +827,10 @@ void Compute(graph<vertex> &GA, commandLine P) {
     long max_degree = 0;
     for (long v = 0; v < GA.n; v++) max_degree = std::max<long>(max_degree, GA.V[v].getOutDegree());
     std::printf("XBConfig: arm=ligra variant=%s reuse=%d counters=%d opt=%d triplet=%d lb=ligra-edgemap dataset=%s nodes=%ld "
-                "edges=%ld max_degree=%ld warmup=%ld rounds=%ld threads=%d\n",
+                "edges=%ld max_degree=%ld warmup=%ld rounds=%ld threads=%d load_first=%d\n",
                 !XBP_OPT ? "xb-pro-ligra-xbpro" : !XBP_TRIPLET ? "xb-pro-ligra-vector" : XBP_REUSE ? "xb-pro-ligra" : "xb-ligra",
                 XBP_REUSE, XBP_COUNTERS, XBP_OPT, XBP_TRIPLET, P.getOptionValue("-dataset", "unknown").c_str(), GA.n, GA.m / 2, max_degree, warmup,
-                rounds - warmup, getWorkers());
+                rounds - warmup, getWorkers(), kLoadFirst ? 1 : 0);
   }
   const long call = R.calls++;
 

@@ -91,7 +91,10 @@ void Compute(graph<vertex>& GA, commandLine P) {
   static bool sorted = false;
   vertexMap(Frontier,initF<vertex>(GA.V,counts,!sorted));
   sorted = true;
-  edgeMap(GA,Frontier,countF<vertex>(GA.V,counts), -1, no_output);
+  // GACGE: dense_parallel splits the in-edges of a vertex of degree > 1000
+  // over the workers (Ligra's own flag): with one worker per vertex, the
+  // 575K-degree vertices of Arabic ran their quadratic merges on one core.
+  edgeMap(GA,Frontier,countF<vertex>(GA.V,counts), -1, no_output | dense_parallel);
   long count = sequence::plusReduce(counts,n);
   cout << "triangle count = " << count << endl;
   Frontier.del(); free(counts);
