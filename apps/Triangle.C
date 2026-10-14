@@ -68,10 +68,11 @@ template <class vertex>
 struct initF { //for vertexMap to initial counts and sort neighbors for merging
   vertex* V;
   long* counts;
-  initF(vertex* _V, long* _counts) : V(_V), counts(_counts) {}
+  bool sort;
+  initF(vertex* _V, long* _counts, bool _sort) : V(_V), counts(_counts), sort(_sort) {}
   inline bool operator () (uintE i) {
     counts[i] = 0;
-    quickSort(V[i].getOutNeighbors(),V[i].getOutDegree(),intLT());
+    if (sort) quickSort(V[i].getOutNeighbors(),V[i].getOutDegree(),intLT());
     return 1;
   }
 };
@@ -84,7 +85,12 @@ void Compute(graph<vertex>& GA, commandLine P) {
   {parallel_for(long i=0;i<n;i++) frontier[i] = 1;} 
   vertexSubset Frontier(n,n,frontier); //frontier contains all vertices
 
-  vertexMap(Frontier,initF<vertex>(GA.V,counts));
+  // The adjacency lists are sorted in place by the first call only (GACGE: its
+  // round is the dropped warm-up), so later rounds time the counting alone, as
+  // Gunrock's tc on a CSR read sorted.
+  static bool sorted = false;
+  vertexMap(Frontier,initF<vertex>(GA.V,counts,!sorted));
+  sorted = true;
   edgeMap(GA,Frontier,countF<vertex>(GA.V,counts), -1, no_output);
   long count = sequence::plusReduce(counts,n);
   cout << "triangle count = " << count << endl;

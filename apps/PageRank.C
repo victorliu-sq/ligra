@@ -70,7 +70,9 @@ template <class vertex>
 void Compute(graph<vertex>& GA, commandLine P) {
   long maxIters = P.getOptionLongValue("-maxiters",100);
   const intE n = GA.n;
-  const double damping = 0.85, epsilon = 0.0000001;
+  // -epsilon 0: no convergence test, exactly -maxiters iterations (GACGE runs
+  // 20, as Gunrock's pr driver with GACGE_PR_ITERS=20)
+  const double damping = 0.85, epsilon = P.getOptionDoubleValue("-epsilon",0.0000001);
   
   double one_over_n = 1/(double)n;
   double* p_curr = newA(double,n);
@@ -82,8 +84,10 @@ void Compute(graph<vertex>& GA, commandLine P) {
 
   vertexSubset Frontier(n,n,frontier);
   
-  long iter = 0;
+  long iter = 0, done = 0;
+  double L1_last = 0;
   while(iter++ < maxIters) {
+    done = iter;
     edgeMap(GA,Frontier,PR_F<vertex>(p_curr,p_next,GA.V),0, no_output);
     vertexMap(Frontier,PR_Vertex_F(p_curr,p_next,damping,n));
     //compute L1-norm between p_curr and p_next
@@ -91,10 +95,15 @@ void Compute(graph<vertex>& GA, commandLine P) {
       p_curr[i] = fabs(p_curr[i]-p_next[i]);
       }}
     double L1_norm = sequence::plusReduce(p_curr,n);
+    L1_last = L1_norm;
     if(L1_norm < epsilon) break;
     //reset p_curr
     vertexMap(Frontier,PR_Vertex_Reset(p_curr));
     swap(p_curr,p_next);
   }
+  // p_next holds the ranks of the last iteration when it broke, p_curr otherwise
+  double* p = (done < maxIters || L1_last < epsilon) ? p_next : p_curr;
+  double sum = sequence::plusReduce(p,n);
+  std::printf("PRResult: iterations=%ld L1=%g rank_sum=%.9f rank0=%.9e\n", done, L1_last, sum, p[0]);
   Frontier.del(); free(p_curr); free(p_next); 
 }

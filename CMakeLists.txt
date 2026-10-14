@@ -58,10 +58,16 @@ add_ligra_cilk_app(ligra_xblossom_pro_xbpro_cilk XBlossomPro_xbpro)
 # XB-Pro's path table (a vector per node) instead of the default triplet records, for the design comparisons.
 add_ligra_cilk_app(ligra_xblossom_pro_vector_cilk XBlossomPro_vector)
 
+# Iterative algorithms (SEP-Graph's classification): PageRank and Triangle Counting.
+add_ligra_cilk_app(ligra_pagerank_cilk PageRank)
+add_ligra_cilk_app(ligra_triangle_cilk Triangle)
+
 add_ligra_cilkscale_app(ligra_bfs_cilkscale BFS)
 add_ligra_cilkscale_app(ligra_sssp_cilkscale SSSP)
 add_ligra_cilkscale_app(ligra_multisssp_cilkscale MultiSSSP)
 add_ligra_cilkscale_app(ligra_xblossom_pro_cilkscale XBlossomPro)
+add_ligra_cilkscale_app(ligra_pagerank_cilkscale PageRank)
+add_ligra_cilkscale_app(ligra_triangle_cilkscale Triangle)
 
 add_custom_target(ligra_cilk ALL
     DEPENDS ligra_bfs_cilk ligra_sssp_cilk ligra_multisssp_cilk
@@ -69,5 +75,6 @@ add_custom_target(ligra_cilk ALL
             ligra_xblossom_pro_cilk ligra_xblossom_noreuse_cilk ligra_xblossom_pro_counters_cilk
             ligra_xblossom_pro_xbpro_cilk ligra_xblossom_pro_vector_cilk
             ligra_bfs_cilkscale ligra_sssp_cilkscale ligra_multisssp_cilkscale ligra_xblossom_pro_cilkscale
-    COMMENT "Build the Ligra apps with OpenCilk: BFS, SSSP, MultiSSSP (+ _Throughput), XBlossomPro"
+            ligra_pagerank_cilk ligra_triangle_cilk ligra_pagerank_cilkscale ligra_triangle_cilkscale
+    COMMENT "Build the Ligra apps with OpenCilk: BFS, SSSP, MultiSSSP (+ _Throughput), XBlossomPro, PageRank, Triangle"
 )
