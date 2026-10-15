@@ -32,6 +32,7 @@
 #include <atomic>
 #include <cstdio>
 #include "parallel.h"
+#include <cmath>
 #include "gettime.h"
 #include "utils.h"
 #include "vertex.h"
@@ -293,6 +294,72 @@ inline void gacge_walk(unsigned long len) {
   if (!gacge_regions()) return;
   unsigned long cur = gacge_walk_max().load(std::memory_order_relaxed);
   while (len > cur && !gacge_walk_max().compare_exchange_weak(cur, len, std::memory_order_relaxed)) {}
+}
+// GACGE_EDGE_WORK: the distribution of the work per examined edge, 1 for the
+// examination plus the serial work the edge triggers (TC: the merge steps of
+// its intersection; X-Blossom: the blossom walk and claims of a closing edge,
+// the path flip of an augmenting edge). Per-worker log2 histograms, merged by
+// gacge_edge_work_report(alg) into one EdgeWork and one EdgeWorkHist line.
+inline bool gacge_edge_work_on() {
+  static const bool on = std::getenv("GACGE_EDGE_WORK") != nullptr;
+  return on;
+}
+struct alignas(64) gacge_ew_slot {
+  unsigned long n = 0, units = 0, max = 0;
+  double sq = 0;
+  unsigned long hn[64] = {0}, hu[64] = {0};  // bucket b: units in [2^b, 2^(b+1))
+};
+inline gacge_ew_slot* gacge_ew() { static gacge_ew_slot s[512]; return s; }
+inline void gacge_edge_work(unsigned long u) {
+  if (!gacge_edge_work_on()) return;
+#if defined(OPENCILK)
+  gacge_ew_slot& s = gacge_ew()[__cilkrts_get_worker_number() & 511];
+#else
+  gacge_ew_slot& s = gacge_ew()[0];
+#endif
+  s.n++;
+  s.units += u;
+  s.sq += (double)u * (double)u;
+  if (u > s.max) s.max = u;
+  const int b = u ? 63 - __builtin_clzl(u) : 0;
+  s.hn[b]++;
+  s.hu[b] += u;
+}
+inline void gacge_edge_work_report(const char* alg) {
+  if (!gacge_edge_work_on()) return;
+  static int run = -1;
+  ++run;
+  gacge_ew_slot t;
+  for (int w = 0; w < 512; w++) {
+    gacge_ew_slot& s = gacge_ew()[w];
+    t.n += s.n; t.units += s.units; t.sq += s.sq; if (s.max > t.max) t.max = s.max;
+    for (int b = 0; b < 64; b++) { t.hn[b] += s.hn[b]; t.hu[b] += s.hu[b]; }
+    s = gacge_ew_slot();
+  }
+  if (!t.n) return;
+  const double mean = (double)t.units / t.n;
+  const double var = t.sq / t.n - mean * mean;
+  // quantiles as bucket upper bounds; the heaviest 1% of edges' share of the
+  // units, the boundary bucket taken in proportion
+  auto q = [&](double f) {
+    unsigned long c = 0;
+    for (int b = 0; b < 64; b++) { c += t.hn[b]; if (c >= f * t.n) return (2UL << b) - 1; }
+    return t.max;
+  };
+  double top = 0, need = 0.01 * t.n;
+  for (int b = 63; b >= 0 && need > 0; b--) {
+    if (!t.hn[b]) continue;
+    const double take = need < t.hn[b] ? need : (double)t.hn[b];
+    top += t.hu[b] * (take / t.hn[b]);
+    need -= take;
+  }
+  std::printf("EdgeWork: run=%d alg=%s edges=%lu units=%lu mean=%.6g cv=%.6g max=%lu p50=%lu p90=%lu p99=%lu "
+              "p999=%lu top1pct_share=%.6f\n", run, alg, t.n, t.units, mean, var > 0 ? std::sqrt(var) / mean : 0.0,
+              t.max, q(0.5), q(0.9), q(0.99), q(0.999), top / (double)t.units);
+  std::printf("EdgeWorkHist: run=%d alg=%s", run, alg);
+  for (int b = 0; b < 64; b++)
+    if (t.hn[b]) std::printf(" %d:%lu:%lu", b, t.hn[b], t.hu[b]);
+  std::printf("\n");
 }
 struct gacge_region_state {
   int run = -1;

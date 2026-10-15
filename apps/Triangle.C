@@ -32,7 +32,7 @@
 
 //assumes sorted neighbor lists
 template <class vertex>
-long countCommon(vertex& A, vertex& B, uintE a, uintE b) { 
+long countCommon(vertex& A, vertex& B, uintE a, uintE b, long* steps = nullptr) { 
   uintT i=0,j=0,nA = A.getOutDegree(), nB = B.getOutDegree();
   uintE* nghA = (uintE*) A.getOutNeighbors(), *nghB = (uintE*) B.getOutNeighbors();
   long ans=0;
@@ -41,7 +41,18 @@ long countCommon(vertex& A, vertex& B, uintE a, uintE b) {
     else if (nghA[i] < nghB[j]) i++;
     else j++;
   }
+  if (steps) *steps = (long)(i + j);  // GACGE_EDGE_WORK: list entries the merge consumed
   return ans;
+}
+
+// GACGE_EDGE_WORK: an edge's work is 1, plus its merge steps when it counts
+template <class vertex>
+inline long countEdge(vertex* V, uintE s, uintE d) {
+  if (!gacge_edge_work_on()) return countCommon<vertex>(V[s],V[d],s,d);
+  long steps = 0;
+  const long c = countCommon<vertex>(V[s],V[d],s,d,&steps);
+  gacge_edge_work(1 + steps);
+  return c;
 }
 
 template <class vertex>
@@ -51,12 +62,14 @@ struct countF { //for edgeMap
   countF(vertex* _V, long* _counts) : V(_V), counts(_counts) {}
   inline bool update (uintE s, uintE d) {
     if(s > d) //only count "directed" triangles
-      writeAdd(&counts[s], countCommon<vertex>(V[s],V[d],s,d));
+      writeAdd(&counts[s], countEdge<vertex>(V,s,d));
+    else gacge_edge_work(1);
     return 1;
   }
   inline bool updateAtomic (uintE s, uintE d) {
     if (s > d) //only count "directed" triangles
-      writeAdd(&counts[s], countCommon<vertex>(V[s],V[d],s,d));
+      writeAdd(&counts[s], countEdge<vertex>(V,s,d));
+    else gacge_edge_work(1);
     return 1;
   }
   inline bool cond (uintE d) { return cond_true(d); } //does nothing
@@ -95,6 +108,7 @@ void Compute(graph<vertex>& GA, commandLine P) {
   // over the workers (Ligra's own flag): with one worker per vertex, the
   // 575K-degree vertices of Arabic ran their quadratic merges on one core.
   edgeMap(GA,Frontier,countF<vertex>(GA.V,counts), -1, no_output | dense_parallel);
+  gacge_edge_work_report("tc");
   long count = sequence::plusReduce(counts,n);
   cout << "triangle count = " << count << endl;
   Frontier.del(); free(counts);

@@ -302,7 +302,7 @@ static long ClaimOddOnChain(State &S, int s, int o, int base) {
 // (s, o, base) met at u stands for (s, o), route(s) before u, and route(o),
 // which reaches base and goes on as the rest of this walk: route(s) is
 // walked first, route(o) kept on a stack (one entry per nesting level).
-static void FlipRoute(State &S, int x) {
+static unsigned long FlipRoute(State &S, int x) {
   struct Walk {
     int x, stop;  // stop >= 0: end at the expand record whose w is stop (an odd node); -1: the root
   };
@@ -335,6 +335,7 @@ static void FlipRoute(State &S, int x) {
     cur = stack[--depth];
   }
   gacge_walk(visited);
+  return visited;
 }
 
 // v, then the nodes of its path table entries up to its tree's root, appended to out.
@@ -362,9 +363,19 @@ struct Augment_F {
   static constexpr const char *kPhase = "augment";
   State &S;
   explicit Augment_F(State &s) : S(s) {}
-  inline bool cond(uintE w) { return S.is_even[w]; }
+  inline bool cond(uintE w) {
+    if (S.is_even[w]) return true;
+    gacge_edge_work(1);  // GACGE_EDGE_WORK: examined, not taken
+    return false;
+  }
   inline bool update(uintE v, uintE w) { return updateAtomic(v, w); }
+  // GACGE_EDGE_WORK: 1 per edge; an augmenting edge counts at its flip instead
   inline bool updateAtomic(uintE v, uintE w) {
+    if (!Augment(v, w)) gacge_edge_work(1);
+    return false;
+  }
+  // true: (v, w) recorded as an augmenting path
+  inline bool Augment(uintE v, uintE w) {
     int tv = S.belongs[v], tw = S.belongs[w];
     if (tv == tw || tv == -1 || tw == -1) return false;
     if (XBP_OPT) {
@@ -396,7 +407,7 @@ struct Augment_F {
       std::vector<int> &ap = S.aug_pairs[WorkerId()];
       ap.push_back(v);
       ap.push_back(w);
-      return false;
+      return true;
     }
     if (XBP_OPT) {
       // root(v) .. v, w .. root(w), written straight into this worker's buffer
@@ -407,14 +418,14 @@ struct Augment_F {
       S.path_start[t].push_back(static_cast<int>(pn.size()));
       pn.insert(pn.end(), sc.rbegin(), sc.rend());
       AppendPathToRoot(S, w, pn);
-      return false;
+      return true;
     }
     std::vector<int> pv = PathToRoot(S, v), pw = PathToRoot(S, w);
     std::vector<int> path(pv.rbegin(), pv.rend());
     path.insert(path.end(), pw.begin(), pw.end());
     std::lock_guard<std::mutex> g(S.paths_mutex);
     S.paths.push_back(std::move(path));
-    return false;
+    return true;
   }
 };
 
@@ -423,9 +434,14 @@ struct Expand_F {
   static constexpr const char *kPhase = "expand";
   State &S;
   explicit Expand_F(State &s) : S(s) {}
-  inline bool cond(uintE w) { return S.belongs[w] == -1; }
+  inline bool cond(uintE w) {
+    if (S.belongs[w] == -1) return true;
+    gacge_edge_work(1);  // GACGE_EDGE_WORK: examined, not taken
+    return false;
+  }
   inline bool update(uintE v, uintE w) { return updateAtomic(v, w); }
   inline bool updateAtomic(uintE v, uintE w) {
+    gacge_edge_work(1);  // GACGE_EDGE_WORK
     int x = S.M[w];
     if (!TryClaim(S.select_match[std::min<int>(w, x)])) return false;
     if (XBP_TRIPLET) {
@@ -494,7 +510,11 @@ struct Blossom_F {
   static constexpr const char *kPhase = "blossom";
   State &S;
   explicit Blossom_F(State &s) : S(s) {}
-  inline bool cond(uintE w) { return S.is_even[w]; }
+  inline bool cond(uintE w) {
+    if (S.is_even[w]) return true;
+    gacge_edge_work(1);  // GACGE_EDGE_WORK: examined, not taken
+    return false;
+  }
   inline bool update(uintE v, uintE w) { return updateAtomic(v, w); }
 
   inline void TryMakeEven(const std::vector<int> &blossom, int k, bool anticlockwise) {
@@ -526,16 +546,24 @@ struct Blossom_F {
   }
 
   inline bool updateAtomic(uintE v, uintE w) {
-    if (S.belongs[w] != S.belongs[v] || static_cast<int>(w) == S.M[v] || S.belongs[w] == -1) return false;
+    if (S.belongs[w] != S.belongs[v] || static_cast<int>(w) == S.M[v] || S.belongs[w] == -1) {
+      gacge_edge_work(1);  // GACGE_EDGE_WORK
+      return false;
+    }
     if (XBP_TRIPLET) {
       long steps = 0;
       const int base = FindBaseByAnchor(S, v, w, &steps);
-      if (base < 0) return false;
+      if (base < 0) {
+        gacge_edge_work(1 + static_cast<unsigned long>(steps));
+        return false;
+      }
       steps += ClaimOddOnChain(S, v, w, base);
       steps += ClaimOddOnChain(S, w, v, base);
       gacge_walk(static_cast<unsigned long>(steps));  // one serial strand: base walk + both claims
+      gacge_edge_work(1 + static_cast<unsigned long>(steps));  // GACGE_EDGE_WORK: the closing edge
       return false;
     }
+    gacge_edge_work(1);
     std::vector<int> local;
     std::vector<int> &blossom = XBP_OPT ? S.scratch[WorkerId()] : local;
     FindBlossom(S, v, w, blossom);
@@ -750,8 +778,8 @@ static void MaximumMatching(graph<vertex> &GA, State &S) {
           const int v = ap[2 * i], w = ap[2 * i + 1];
           S.M[v] = w;
           S.M[w] = v;
-          FlipRoute(S, v);
-          FlipRoute(S, w);
+          const unsigned long flips = FlipRoute(S, v) + FlipRoute(S, w);
+          gacge_edge_work(1 + flips);  // GACGE_EDGE_WORK: the augmenting edge and its flip
         }
       }
       for (auto &ap : S.aug_pairs) ap.clear();
@@ -841,6 +869,7 @@ void Compute(graph<vertex> &GA, commandLine P) {
   XBP_WS_END(ws_init, "init", call);
   XBP_WS_BEGIN(ws_match);
   xbp::MaximumMatching(GA, S);
+  gacge_edge_work_report("xb");
   gacge_cut("tail");  // the last phase's end; the check follows as the run's last region
   XBP_WS_END(ws_match, "match", call);
   double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
